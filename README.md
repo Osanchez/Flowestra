@@ -149,7 +149,7 @@ A unit the orchestrator carries out itself has no tier and takes `declared` (pen
 The pane is a flow diagram, top to bottom: the lead's box, the plan box (phase, wave, units finished), a row of Haiku workers whose results are leads, a row of Sonnet and Opus workers, and the box where results return to the lead.
 
 - **Colours by tier:** Haiku magenta, Sonnet blue, Opus lavender. A finished card turns green, a failed one red.
-- **Live cards:** each shows its model and task type, a moving bar, its current tool, elapsed time and output tokens. Dots travel along the rails as work goes out and comes back. Token counts are real, never estimated.
+- **Live cards:** each shows its model and task type, a moving bar, its current tool, elapsed time and tokens in and out. Dots travel along the rails as work goes out and comes back. Token counts are real, never estimated.
 - **Nothing slides past unchecked:** a finished Haiku or Sonnet card stays in its row, reading `lead · unchecked` or `draft · unchecked`, until its verdict is recorded.
 - **Tasks:** the header shows the active task and how many others are open. Counts follow the active task; a worker of another task that is still running keeps its card, marked with that task's id.
 - **Session log and detail:** below the diagram, a log of spawns, audit lines, verdicts and task changes. Click a card for its brief, routing and tools in flight.

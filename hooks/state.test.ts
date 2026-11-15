@@ -55,6 +55,7 @@ import {
   parkedMatch,
   prettyModel,
   reconcile,
+  emptyLive,
   liveAtom,
   resetBoard,
   rowAgents,
@@ -446,8 +447,9 @@ test('a units update re-links boxes by name and clears links to units that are g
 })
 
 test('the live value starts empty under its own shape tag', () => {
-  expect(liveAtom.shape).toBe('live-1')
-  expect(liveAtom.initial).toEqual({ now: 0, sessionTotal: null, paneOpen: false })
+  expect(liveAtom.shape).toBe('live-2')
+  expect(liveAtom.initial).toEqual({ now: 0, paneOpen: false })
+  expect(emptyLive()).toEqual({ now: 0, paneOpen: false })
 })
 
 // ---- the row of live workers ----

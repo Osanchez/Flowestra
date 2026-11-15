@@ -50,7 +50,6 @@ type World = {
   placeOnOpen: boolean
   opens: number
   list: { id: string; description: string; type: string; status: string; name?: string; parentId?: string }[]
-  usd: number | null
   listCalls: number
   board: Board | null
   live: Live | null
@@ -63,6 +62,7 @@ type World = {
   failLogWrites: boolean // only writes under `log` fail
   spawnCalls: number // spawns that reached the engine
   spawnModel: string | null // what a spawn runs on; null: what the call asks for
+  oldLive: boolean
   corruptBoard: boolean // reads of `board` answer a board with no units or rejects lists
   reads: string[] // the keys read, in order
   boardGate: Promise<void> | null // the next board write waits for this, then the gate is gone
@@ -129,6 +129,10 @@ function engine(on: any, w: World) {
     if (w.corruptBoard && e.key === 'board') {
       return { value: { value: { shape: 'board-5', value: { taskId: null, repo: null, task: null, phase: null, wave: null, units: null, agents: {}, order: [], loadedAt: T0, note: null, rejects: null, parked: null, closed: null, activeAt: T0 } }, version: 99 } }
     }
+    // a live value stored by the earlier shape (live-1), which had a cost text
+    if (w.oldLive && e.key === 'live') {
+      return { value: { value: { shape: 'live-1', value: { now: 5, cost: '$2.50', paneOpen: true } }, version: 1 } }
+    }
     return next(e)
   })
   on('command.register', (_: any, e: any) => ({ value: { command: e.name } }))
@@ -142,9 +146,6 @@ function engine(on: any, w: World) {
     w.listCalls += 1
     return { value: w.list }
   })
-  on('session.usage', () => ({
-    value: { startedAt: T0, context: { window: 200_000 }, rateLimits: [], ...(w.usd === null ? {} : { cost: { usd: w.usd } }) },
-  }))
   on('session.id', () => ({ value: SESSION }))
   on('fs.read', (_: any, e: any) => {
     if (!(e.path in w.files)) throw new Error(`ENOENT: ${e.path}`)
@@ -207,8 +208,8 @@ function engine(on: any, w: World) {
 
 function world(over: Partial<World> = {}): World {
   return {
-    panes: [], placeOnOpen: true, opens: 0, list: [], usd: null, listCalls: 0, board: null, live: null, detail: null, ui: null, log: null,
-    liveWrites: 0, animWrites: 0, failWrites: false, failLogWrites: false, spawnCalls: 0, spawnModel: null, corruptBoard: false, reads: [],
+    panes: [], placeOnOpen: true, opens: 0, list: [], listCalls: 0, board: null, live: null, detail: null, ui: null, log: null,
+    liveWrites: 0, animWrites: 0, failWrites: false, failLogWrites: false, spawnCalls: 0, spawnModel: null, corruptBoard: false, oldLive: false, reads: [],
     boardGate: null, units: [], registered: [], files: {}, fsWrites: [], failFsWrite: false, failExists: false, env: { HOME },
     mtimes: {}, root: '/work/main', repo: null, failJournal: false, spawned: [], ghosts: [],
     ...over,
@@ -611,7 +612,7 @@ test('/clear resets the board', async ($, on) => {
 // ---------------------------------------------------------------- the clock
 
 test('the clock ticks once a second while something runs, reconciles every fifth tick, and stops itself', async ($, on) => {
-  const w = world({ usd: 1.234 })
+  const w = world()
   const clock = engine(on, w)
   await start($)
   await work($, w, 'Tick worker')
@@ -621,10 +622,8 @@ test('the clock ticks once a second while something runs, reconciles every fifth
   await clock.advance(3000)
   expect(liveOf(w).now).toBe(T0 + 4000)
   expect(w.listCalls).toBe(callsAfterSpawn)
-  expect(liveOf(w).sessionTotal).toBeNull()
   await clock.advance(1000)
   expect(w.listCalls).toBe(callsAfterSpawn + 1)
-  expect(liveOf(w).sessionTotal).toBe('$1.23')
   // the list says it finished: the fifth-tick reconcile marks it done, its card
   // lingers two seconds, and the tick that sees it gone stops the clock
   w.list = [{ id: 'agent-tick', description: 'Tick worker', type: 'general-purpose', status: 'completed' }]
@@ -726,7 +725,7 @@ test('the pane: the flow module with its props on the terminal, the still flow o
   const flow = await flowOf(ui)
   expect(flow.workers.map(c => c.id)).toEqual(['agent-write', 'agent-help', 'agent-gone']) // the done one still lingers
   expect(flow.workers[0]).toEqual(
-    expect.objectContaining({ label: 'Write the state module', status: 'running', tokens: 'out 3.1k', selected: false, model: 'Sonnet 5.5 · implement', row: 'workers', tier: 'sonnet', warn: false }),
+    expect.objectContaining({ label: 'Write the state module', status: 'running', tokens: 'in 37.2k out 3.1k', selected: false, model: 'Sonnet 5.5 · implement', row: 'workers', tier: 'sonnet', warn: false }),
   )
   expect(flow.workers[2]!.status).toBe('done')
   expect(flow.plan).toEqual({ title: 'PLAN · executing · wave 1', done: 1, total: 2, counts: 'running 2  failed 0  queued 0' }) // U1 and Gone worker's unit
@@ -750,7 +749,7 @@ test('the pane: the flow module with its props on the terminal, the still flow o
   expect(await ui.find({ key: 'still-flow' })).toBeDefined()
   const card = await ui.find({ key: 'slot-agent-write' })
   expect(card?.text).toMatch(/Write the state module/)
-  expect(card?.text).toMatch(/out 3\.1k/)
+  expect(card?.text).toMatch(/in 37\.2k out 3\.1k/)
   expect((await ui.find({ key: 'slot-agent-help' }))?.text).toMatch(/Help the writer/)
   // pressing a still card selects it, as a post from the flow module does
   await ui.press({ key: 'card-agent-help' })
@@ -769,14 +768,14 @@ test('the lead box: waiting with no events, running while the main loop works, w
   await start($)
   const mount = () => $.ui.mount({ plugin: 'flowestra', component: 'Pane', requestId: 'flowestra', surface: 'terminal', props: PANE_PROPS(96) })
   let ui: any = await mount()
-  expect((await flowOf(ui)).lead).toEqual({ title: 'Orchestrator · main session', running: false, line: 'no events yet', tokens: 'out n/a' })
+  expect((await flowOf(ui)).lead).toEqual({ title: 'Orchestrator · main session', running: false, line: 'no events yet', tokens: 'tokens n/a' })
   expect((await ui.find({ key: 'status' }))?.text).toMatch(/^lead \[waiting\] {3}workers \[0\/0\] {3}phase \[not set\]$/)
   await ui.unmount()
 
   // a step from the main loop with no turn start: running, its model shown
   await step($, on, undefined, null)
   ui = await mount()
-  expect((await flowOf(ui)).lead).toEqual({ title: 'Haiku 4.5 · main session', running: true, line: 'thinking', tokens: 'out 3.1k' })
+  expect((await flowOf(ui)).lead).toEqual({ title: 'Haiku 4.5 · main session', running: true, line: 'thinking', tokens: 'in 37.2k out 3.1k' })
   expect((await flowOf(ui)).back.title).toBe('back to Haiku 4.5 · lead')
   expect((await ui.find({ key: 'legend' }))?.text).toBe('■ Haiku 4.5 · lead')
   expect((await ui.find({ key: 'status' }))?.text).toMatch(/^lead \[working\]/)
@@ -819,15 +818,16 @@ test('the pane height: the plan box and the session log by exact row accounting'
   }
 })
 
-test('the session cost is at the end of the status line', async ($, on) => {
-  const w = world({ usd: 2.5 })
+test('the status line ends with the phase: no cost, even with a stored earlier live value (live-1)', async ($, on) => {
+  const w = world()
   const clock = engine(on, w)
+  w.oldLive = true
   await start($)
   await work($, w, 'Cost worker')
-  await clock.advance(5000) // the fifth tick refreshes the session total
+  await clock.advance(5000)
   for (const surface of SURFACES) {
     const ui: any = await $.ui.mount({ plugin: 'flowestra', component: 'Pane', requestId: 'flowestra', surface, props: PANE_PROPS(96) })
-    expect((await ui.find({ key: 'status' }))?.text).toMatch(/^lead \[waiting\] {3}workers \[1\/1\] {3}phase \[not set\] {3}\$2\.50$/)
+    expect((await ui.find({ key: 'status' }))?.text).toMatch(/^lead \[waiting\] {3}workers \[1\/1\] {3}phase \[not set\]$/)
     await ui.unmount()
   }
 })

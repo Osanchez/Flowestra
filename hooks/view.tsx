@@ -56,7 +56,6 @@ export type ViewModel = {
   height: number | null
   unitStates: Record<string, UnitState>
   quiet: Record<string, boolean>
-  sessionTotal: string | null
   detail: Detail // per-agent brief and tool calls in flight
   ui: Ui // the card whose detail strip is open
   log: Log // the session log, oldest first
@@ -219,10 +218,12 @@ function withElapsed(head: string, elapsed: string | null): string {
   return elapsed === null ? head : `${head} · ${elapsed}`
 }
 
-/** `out 3.1k`, `out ≥3.1k`, or `out n/a`. */
-function outText(box: AgentBox): string {
-  if (box.tokens === null) return 'out n/a'
-  return `out ${box.tokensPartial ? '≥' : ''}${formatCount(box.tokens.output)}`
+/** `in 45k out 8.1k`, `in ≥45k out ≥8.1k`, or `tokens n/a`; in is every token the model read. */
+function tokensText(box: AgentBox): string {
+  if (box.tokens === null) return 'tokens n/a'
+  const p = box.tokensPartial ? '≥' : ''
+  const inTotal = box.tokens.input + box.tokens.cacheWrite + box.tokens.cacheRead
+  return `in ${p}${formatCount(inTotal)} out ${p}${formatCount(box.tokens.output)}`
 }
 
 /** Cut to `max` characters, the last one `…` when cut. */
@@ -322,7 +323,7 @@ function cardOf(vm: ViewModel, box: AgentBox): RowCard {
     status,
     model,
     line,
-    tokens: outText(box),
+    tokens: tokensText(box),
     selected: vm.ui.selected === box.id,
   }
 }
@@ -370,7 +371,7 @@ function leadState(vm: ViewModel): { running: boolean; line: string; tokens: str
   } else {
     line = 'waiting'
   }
-  return { running, line, tokens: main === undefined ? 'out n/a' : outText(main) }
+  return { running, line, tokens: main === undefined ? 'tokens n/a' : tokensText(main) }
 }
 
 /** The plan box's counts: the three parts joined with two spaces when that fits in PLAN_INNER, else one. */
@@ -851,7 +852,6 @@ function drawStatus(el: El, vm: ViewModel): RenderElement {
             {`[${p.value}]`}
           </Text>
         ))}
-        {vm.sessionTotal !== null && <Text dimColor>{`   ${vm.sessionTotal}`}</Text>}
       </Text>
     </Box>
   )

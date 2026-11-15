@@ -293,16 +293,6 @@ async function reconcileNow($: EngineInterface): Promise<void> {
   await changeBoard($, b => reconcile(b, list, at), at)
 }
 
-function formatCost(usd: number): string {
-  return `$${usd.toFixed(2)}`
-}
-
-async function refreshSessionTotal($: EngineInterface): Promise<void> {
-  const usage = await $.session.usage()
-  const total = usage.cost && Number.isFinite(usage.cost.usd) ? formatCost(usage.cost.usd) : null
-  await update($, liveAtom, live => ({ ...live, sessionTotal: total }))
-}
-
 /** Whether the clock has work: something runs, or an ended worker's card still lingers in the row. */
 function clockWanted(board: Board, at: number): boolean {
   return anythingRunning(board) || anythingLingering(board, at)
@@ -323,11 +313,6 @@ async function tick($: EngineInterface): Promise<void> {
       await reconcileNow($)
     } catch {
       // the list could not be read this time; the next fifth tick tries again
-    }
-    try {
-      await refreshSessionTotal($)
-    } catch {
-      // keep the previous total
     }
   }
   const board = await read($, boardAtom)
@@ -1424,7 +1409,7 @@ async function baseModel($: EngineInterface, width: number, height: number | nul
   for (const u of board.units) unitStates[u.id] = unitState(board, u)
   const quiet: ViewModel['quiet'] = {}
   for (const box of Object.values(board.agents)) if (isQuiet(box, at)) quiet[box.id] = true
-  return { board, now: at, width, height, unitStates, quiet, sessionTotal: live.sessionTotal }
+  return { board, now: at, width, height, unitStates, quiet }
 }
 
 /** The pane's model: reads (and so redraws on) detail, ui and the log as well. */

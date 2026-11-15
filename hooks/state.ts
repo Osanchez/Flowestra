@@ -21,17 +21,17 @@ const DEFAULT_TYPE = 'general-purpose'
 // register.tsx declares its own atoms over the same refs with these tags
 // (`claude plugin validate` reads only an atom made in the file that uses it).
 export const BOARD_SHAPE = 'board-5'
-export const LIVE_SHAPE = 'live-1'
+export const LIVE_SHAPE = 'live-2'
 
 export const boardAtom = atom({ plugin: 'flowestra', key: 'board' } as const, emptyBoard(0), {
   shape: BOARD_SHAPE,
 })
 
 export function emptyLive(): Live {
-  return { now: 0, sessionTotal: null, paneOpen: false }
+  return { now: 0, paneOpen: false }
 }
 
-// The clock tick the view draws from, the session total text and whether the pane is open.
+// The clock tick the view draws from, whether the pane is open.
 export const liveAtom = atom({ plugin: 'flowestra', key: 'live' } as const, emptyLive(), {
   shape: LIVE_SHAPE,
 })

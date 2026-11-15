@@ -82,9 +82,9 @@ export type Board = {
   activeAt: number                                                   // epoch ms the active task became active
 }
 
-// What the pane draws from besides the board: the clock tick, the session
-// total text refreshed at each reconcile, and whether the pane is open.
-export type Live = { now: number; sessionTotal: string | null; paneOpen: boolean }
+// What the pane draws from besides the board: the clock tick and whether the
+// pane is open. (No cost: the mod shows token counts and never a price.)
+export type Live = { now: number; paneOpen: boolean }
 
 // ---- visual layer (0.4.0; two rows 0.5.0; three tiers 0.6.0): a flow diagram,
 // top to bottom: the lead's box, the plan box, then (only while a card is shown
@@ -126,14 +126,14 @@ export type RowCard = {       // one agent's card in its row
   status: RowCardStatus
   model: string          // line 2: "Opus 5.5 · design", "Haiku 5.5 · locate", "Sonnet 5.5 · no audit", "Opus 5.5 · not sonnet", "model n/a"
   line: string           // line 4: "Edit · 1m 12s", "done · 2m 03s", "quiet 3m", "failed: error"
-  tokens: string         // line 5, after the status glyph: "out 8.1k", or "out n/a"
+  tokens: string         // line 5, after the status glyph: "in 45k out 8.1k", "in ≥45k out ≥8.1k", or "tokens n/a"
   selected: boolean
 }
 export type FlowLead = {
   title: string          // "Fable 5.2 · main session"
   running: boolean       // false: waiting
   line: string           // "Edit", "thinking", "waiting", "no events yet"
-  tokens: string         // "out 8.1k"
+  tokens: string         // "in 45k out 8.1k", or "tokens n/a"
 }
 export type FlowPlan = {
   title: string          // "PLAN · executing · wave 2", "PLAN · phase not set"

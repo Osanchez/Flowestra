@@ -116,7 +116,6 @@ function vmOf(b: Board, over: Partial<ViewModel> = {}): ViewModel {
     height: null,
     unitStates: {},
     quiet: {},
-    sessionTotal: null,
     detail: { agents: {} },
     ui: { selected: null },
     log: { entries: [] },
@@ -271,7 +270,7 @@ function threeAndBlocked(): ViewModel {
       agent('w3', { unitId: 'U3', label: 'Write tool', tokens: null, lastTool: 'Read' }),
     ],
   )
-  return vmOf(b, { unitStates: { U1: 'done', U2: 'running', U3: 'running', U4: 'blocked' }, sessionTotal: '$1.42' })
+  return vmOf(b, { unitStates: { U1: 'done', U2: 'running', U3: 'running', U4: 'blocked' } })
 }
 
 // ---------------------------------------------------------------- pure helpers
@@ -360,7 +359,7 @@ describe('flowProps: the worker cards', () => {
       status: 'running',
       model: 'Opus 5.5 · no audit',
       line: 'starting · 3m 12s',
-      tokens: 'out 3.1k',
+      tokens: 'in 37.2k out 3.1k',
       selected: false,
     })
     expect(one(agent('w1', { status: 'starting', startedAt: null })).line).toBe('starting')
@@ -403,10 +402,13 @@ describe('flowProps: the worker cards', () => {
     expect(one(agent('w1', { status: 'done', endedAt: NOW - 1000, startedAt: null })).line).toBe('done')
   })
 
-  test('token text: out count, ≥ when partial, n/a when unknown', () => {
-    expect(one(agent('w1')).tokens).toBe('out 3.1k')
-    expect(one(agent('w1', { tokensPartial: true })).tokens).toBe('out ≥3.1k')
-    expect(one(agent('w1', { tokens: null })).tokens).toBe('out n/a')
+  test('token text: in and out, ≥ when partial, n/a when unknown; in adds input, cache write and cache read', () => {
+    expect(one(agent('w1')).tokens).toBe('in 37.2k out 3.1k')
+    expect(one(agent('w1', { tokensPartial: true })).tokens).toBe('in ≥37.2k out ≥3.1k')
+    expect(one(agent('w1', { tokens: null })).tokens).toBe('tokens n/a')
+    const t = { input: 5_000, output: 8_100, cacheRead: 36_000, cacheWrite: 4_000, requests: 4 }
+    expect(one(agent('w1', { tokens: t })).tokens).toBe('in 45k out 8.1k')
+    expect(one(agent('w1', { tokens: t, tokensPartial: true })).tokens).toBe('in ≥45k out ≥8.1k')
   })
 
   test('a card carries its model\'s display name, or model n/a; no pinned field', () => {
@@ -456,8 +458,8 @@ describe('flowProps: the lead box', () => {
     expect(lead(null).title).toBe('Orchestrator · main session')
   })
 
-  test('no main box: waiting, no events yet, out n/a', () => {
-    expect(lead(null)).toEqual({ title: 'Orchestrator · main session', running: false, line: 'no events yet', tokens: 'out n/a' })
+  test('no main box: waiting, no events yet, tokens n/a', () => {
+    expect(lead(null)).toEqual({ title: 'Orchestrator · main session', running: false, line: 'no events yet', tokens: 'tokens n/a' })
   })
 
   test('running (or starting): its latest tool in flight, else thinking; never quiet', () => {
@@ -470,7 +472,7 @@ describe('flowProps: the lead box', () => {
       title: 'Opus 5.5 · main session',
       running: true,
       line: 'Bash',
-      tokens: 'out 3.1k',
+      tokens: 'in 37.2k out 3.1k',
     })
     expect(lead({ lastTool: 'Edit' }).line).toBe('thinking')
     expect(lead({ status: 'starting' })).toMatchObject({ running: true, line: 'thinking' })
@@ -481,8 +483,9 @@ describe('flowProps: the lead box', () => {
     for (const status of ['waiting', 'done', 'failed', 'stopped'] as const) {
       expect(lead({ status, endedAt: NOW - 1000 })).toMatchObject({ running: false, line: 'waiting' })
     }
-    expect(lead({ tokensPartial: true }).tokens).toBe('out ≥3.1k')
-    expect(lead({ tokens: null }).tokens).toBe('out n/a')
+    expect(lead({ tokensPartial: true }).tokens).toBe('in ≥37.2k out ≥3.1k')
+    expect(lead({ tokens: null }).tokens).toBe('tokens n/a')
+    expect(lead({ tokens: { input: 5_000, output: 8_100, cacheRead: 36_000, cacheWrite: 4_000, requests: 4 } }).tokens).toBe('in 45k out 8.1k')
   })
 })
 
@@ -639,7 +642,7 @@ describe('flowProps: cards of each tier', () => {
         status: 'running',
         model: 'Haiku 5.5 · locate',
         line: 'Grep · 3m 12s',
-        tokens: 'out 3.1k',
+        tokens: 'in 37.2k out 3.1k',
         selected: false,
       },
     ])
@@ -1295,7 +1298,7 @@ test('the still flow: lead box, plan box, worker cards and return box, stacked a
     }
     const p = flowProps(ctx.vm)
     expect(kids(await ui.find({ key: 'still-lead' })).map(textOf)).toEqual([p.lead.title, `${p.lead.line} · ${p.lead.tokens}`])
-    expect(kids(await ui.find({ key: 'still-lead' })).map(textOf)).toEqual(['Fable 5.2 · main session', 'thinking · out 8k'])
+    expect(kids(await ui.find({ key: 'still-lead' })).map(textOf)).toEqual(['Fable 5.2 · main session', 'thinking · in 442k out 8k'])
     expect(kids(await ui.find({ key: 'still-plan' })).map(textOf)).toEqual(['PLAN · executing · wave 1', '1 of 4 units done', 'running 2  failed 0  queued 1'])
     expect(kids(await ui.find({ key: 'still-back' })).map(textOf)).toEqual(['back to Fable 5.2 · lead', 'waiting on 2 · 1 in'])
     expect(kids(kids(await ui.find({ key: 'still-row' }))[0]).map(keyOf)).toEqual(['slot-w1', 'slot-w2', 'slot-w3'])
@@ -1317,7 +1320,7 @@ test('the still flow: lead box, plan box, worker cards and return box, stacked a
     ctx.vm = vmOf(board({ phase: null, wave: null }, [agent('old', { status: 'done', endedAt: NOW - 60_000 })]))
     ui = await mountPane($, surface, ctx.vm)
     expect((await ui.find({ key: 'still-row' }))?.text).toBe('no workers running')
-    expect(kids(await ui.find({ key: 'still-lead' })).map(textOf)).toEqual(['Orchestrator · main session', 'no events yet · out n/a'])
+    expect(kids(await ui.find({ key: 'still-lead' })).map(textOf)).toEqual(['Orchestrator · main session', 'no events yet · tokens n/a'])
     expect(kids(await ui.find({ key: 'still-plan' })).map(textOf)).toEqual(['PLAN · phase not set', 'no units declared', 'running 0  failed 0  queued 0'])
     // something ended and nothing runs: the return box is lit
     const back = await ui.find({ key: 'still-back' })
@@ -1350,23 +1353,23 @@ test('the still row: cards look like the module\'s, without the animation', asyn
       return { card, button, label, lines: kids(card).map(textOf) }
     }
     const w1 = await look('w1')
-    expect(w1.lines).toEqual(['● Do w1', 'Opus 5.5 · design', 'Edit · 3m 12s', 'out 3.1k'])
+    expect(w1.lines).toEqual(['● Do w1', 'Opus 5.5 · design', 'Edit · 3m 12s', 'in 37.2k out 3.1k'])
     // a running opus card in its tier's colour
     expect(w1.card?.props).toMatchObject({ borderStyle: 'round', borderColor: 'suggestion', paddingX: 1, flexDirection: 'column' })
     expect(w1.label?.props).toMatchObject({ bold: true, color: 'suggestion' })
     expect(w1.button?.props.plain).toBe(true)
     const w2 = await look('w2')
-    expect(w2.lines).toEqual(['◌ Do w2', 'Opus 5.5 · design', 'waiting · 3m 12s', 'out 3.1k'])
+    expect(w2.lines).toEqual(['◌ Do w2', 'Opus 5.5 · design', 'waiting · 3m 12s', 'in 37.2k out 3.1k'])
     expect(w2.card?.props).toMatchObject({ borderStyle: 'round', borderDimColor: true })
     expect(w2.label?.props.dimColor).toBe(true)
     const w3 = await look('w3')
-    expect(w3.lines).toEqual(['! Do w3', 'Opus 5.5 · design', 'quiet 2m', 'out 3.1k'])
+    expect(w3.lines).toEqual(['! Do w3', 'Opus 5.5 · design', 'quiet 2m', 'in 37.2k out 3.1k'])
     expect(w3.card?.props.borderColor).toBe('warning')
     const w4 = await look('w4')
     expect(w4.lines[0]).toBe('✓ Do w4')
     expect(w4.card?.props).toMatchObject({ borderStyle: 'double', borderColor: 'success' })
     const w5 = await look('w5')
-    expect(w5.lines).toEqual(['✗ Do w5', 'Opus 5.5 · design', 'failed: API error 529', 'out 3.1k'])
+    expect(w5.lines).toEqual(['✗ Do w5', 'Opus 5.5 · design', 'failed: API error 529', 'in 37.2k out 3.1k'])
     expect(w5.card?.props).toMatchObject({ borderStyle: 'bold', borderColor: 'error' })
     const w6 = await look('w6')
     expect(w6.lines[0]).toBe('■ Do w6')
@@ -1543,17 +1546,18 @@ test('the compact log: the newest two, oldest first, time, who and text, coloure
   }
 })
 
-test('the status line: lead, workers running of all, phase, then the session total; labels dim', async ($, on) => {
+test('the status line: lead, workers running of all, phase, no cost; labels dim', async ($, on) => {
   const ctx: Ctx = { vm: threeAndBlocked() }
   hookUp(on, ctx)
   for (const surface of SURFACES) {
     ctx.vm = threeAndBlocked()
     let ui = await mountPane($, surface, ctx.vm)
     let status = await ui.find({ key: 'status' })
-    expect(status?.text).toBe('lead [working]   workers [2/3]   phase [executing]   $1.42')
+    expect(status?.text).toBe('lead [working]   workers [2/3]   phase [executing]')
+    expect(status?.text).not.toContain('$')
     expect(kids(status)[0]?.props.wrap).toBe('truncate-end')
     const parts = texts(status)
-    for (const label of ['lead ', '   workers ', '   phase ', '   $1.42']) expect(parts.find(t => t.text === label)?.dim).toBe(true)
+    for (const label of ['lead ', '   workers ', '   phase ']) expect(parts.find(t => t.text === label)?.dim).toBe(true)
     // the values are plain text, not inside a dim run
     for (const value of ['working', '2/3', 'executing']) expect(parts.some(t => t.text.includes(value) && t.dim === true)).toBe(false)
     await ui.unmount()
@@ -1566,22 +1570,21 @@ test('the status line: lead, workers running of all, phase, then the session tot
   }
 })
 
-test('the notes: the note and the n/a / ≥ counts; the session total is not there', async ($, on) => {
+test('the notes: the note and the n/a / ≥ counts', async ($, on) => {
   const b = board({ note: 'live counts unavailable in this build' }, [agent('main'), agent('w1', { tokens: null }), agent('w2', { tokensPartial: true })])
-  const ctx: Ctx = { vm: vmOf(b, { sessionTotal: '$1.42' }) }
+  const ctx: Ctx = { vm: vmOf(b) }
   hookUp(on, ctx)
   for (const surface of SURFACES) {
     let ui = await mountPane($, surface, ctx.vm)
     const footer = kids(await ui.find({ key: 'footer' }))
     expect(footer.map(textOf)).toEqual(['live counts unavailable in this build', '1 box has unavailable counts (n/a); 1 box has partial counts (≥)'])
     expect(footer.every(t => t.props.dimColor === true)).toBe(true)
-    expect(textOf(await ui.drawn())).not.toMatch(/Session total/)
     await ui.unmount()
     ctx.vm = vmOf(board({}, [agent('main')]))
     ui = await mountPane($, surface, ctx.vm)
     expect(await ui.find({ key: 'footer' })).toBeUndefined()
     await ui.unmount()
-    ctx.vm = vmOf(b, { sessionTotal: '$1.42' })
+    ctx.vm = vmOf(b)
   }
 })
 
@@ -1693,7 +1696,7 @@ test('the still flow with a leads row: its label, row and feed label between the
     const h1 = await ui.find({ key: 'slot-h1' })
     expect(h1?.props.borderColor).toBe('bashBorder')
     expect(kids(await ui.find({ key: 'card-h1' }))[0]?.props.color).toBe('bashBorder')
-    expect(kids(h1).map(textOf)).toEqual(['● Find call sites', 'Haiku 5.5 · locate', 'working · 3m 12s', 'out 3.1k'])
+    expect(kids(h1).map(textOf)).toEqual(['● Find call sites', 'Haiku 5.5 · locate', 'working · 3m 12s', 'in 37.2k out 3.1k'])
     expect(kids(h1)[1]?.props.dimColor).toBe(true)
     expect((await ui.find({ key: 'slot-w1' }))?.props.borderColor).toBe('suggestion')
     // a Haiku worker with no audit line: line 2 in warning, not dim
@@ -2143,7 +2146,7 @@ test('the drawn pane with two tasks open: the other task\'s card line 2 and the 
   for (const width of [20, 24, 48, 96]) {
     ctx.vm = vmOf(
       { ...base, task: 'A task long enough to need cutting at narrow widths, and then some more words to be sure. '.repeat(2), note: 'live counts unavailable in this build' },
-      { width, height: null, ui: { selected: 'j1' }, log: SOME_LOG, sessionTotal: '$1.42' },
+      { width, height: null, ui: { selected: 'j1' }, log: SOME_LOG },
     )
     for (const surface of SURFACES) {
       const ui = await mountPane($, surface, ctx.vm)
