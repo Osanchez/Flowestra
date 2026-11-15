@@ -609,11 +609,11 @@ function drawCard(surface: Surface, slot: Slot, width: number, marginLeft: numbe
 
   return (
     <Box key={key} width={width} marginLeft={marginLeft} flexDirection="column" paddingX={1} {...borderProps(card)}>
-      <Button key={`card-${card.id}`} plain onPress={select}>
-        <Box flexDirection="row" height={1}>
+      <Box key={`label-${card.id}`} flexDirection="row" height={1}>
+        <Button key={`card-${card.id}`} plain onPress={select}>
           {labelParts}
-        </Box>
-      </Button>
+        </Button>
+      </Box>
       <Text wrap="truncate-end" {...(card.warn ? { color: 'warning' } : { dimColor: true })}>{card.model}</Text>
       <Text wrap="truncate-end" {...barColor(card.status, card.tier)}>{barText(card.status, inner, frame)}</Text>
       <Text wrap="truncate-end" dimColor>{card.line}</Text>

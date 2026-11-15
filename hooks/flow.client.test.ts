@@ -798,24 +798,28 @@ describe('leads: drawFlow', () => {
 describe('card labels stay on one row', () => {
   const LONG = 'Implement the limiter for every single request'
 
-  function labelOf(cards: RowCard[], id: string): { rows: Node[]; text: string; inner: number } {
+  // The label row is a Box of height 1 that HOLDS the card's Button; the Button's own children are
+  // Text only. (A Box inside a Button is refused by the terminal surface: the whole diagram then fails to draw.)
+  function labelOf(cards: RowCard[], id: string): { row: Node; kids: Node[]; text: string; inner: number } {
     const tree = drawFlow(fakeSurface(100), settled(cards), props(cards))
     let slot: Node | undefined
+    let row: Node | undefined
     let button: Node | undefined
     walk(tree, n => {
       if (n.type === 'Box' && n.props.key === `slot-${id}`) slot = n
+      if (n.type === 'Box' && n.props.key === `label-${id}`) row = n
       if (n.type === 'Button' && n.props.key === `card-${id}`) button = n
     })
-    const rows = kidsOf(button!) as Node[]
-    return { rows, text: textOf(button), inner: (slot!.props.width as number) - 4 }
+    return { row: row!, kids: kidsOf(button!) as Node[], text: textOf(button), inner: (slot!.props.width as number) - 4 }
   }
 
   for (const status of ['running', 'waiting', 'done'] as const) {
     test(`a ${status} card with a long label draws the inner width ending in an ellipsis, in one row`, () => {
-      const { rows, text, inner } = labelOf([card('a', { status, label: LONG })], 'a')
-      expect(rows.length).toBe(1)
-      expect(rows[0]!.type).toBe('Box')
-      expect(rows[0]!.props.height).toBe(1)
+      const { row, kids, text, inner } = labelOf([card('a', { status, label: LONG })], 'a')
+      expect(row.props.height).toBe(1)
+      expect((kidsOf(row) as Node[]).map(k => k.type)).toEqual(['Button'])
+      expect(kids.length > 0).toBe(true)
+      expect(kids.every(k => k.type === 'Text')).toBe(true)
       expect([...text].length).toBe(inner)
       expect(text.endsWith('…')).toBe(true)
       expect(text).toBe([...LONG].slice(0, inner - 1).join('') + '…')
