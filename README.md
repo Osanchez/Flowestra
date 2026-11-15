@@ -1,3 +1,5 @@
+<p align="center"><img src=".claude-plugin/icon.png" alt="Flowestra logo" width="150"></p>
+
 # Flowestra
 
 **Run Claude Code as an orchestrator with a team of Opus, Sonnet and Haiku workers, and watch the whole thing live.**
