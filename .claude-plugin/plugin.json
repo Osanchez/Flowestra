@@ -1,0 +1,13 @@
+{
+  "name": "flowestra",
+  "version": "0.8.0",
+  "description": "Orchestrate Claude Code work across model tiers: a live Agent Board of your Opus, Sonnet and Haiku workers, a routing policy with a gate that enforces it, tasks across repositories, and a work journal on disk of every delegation.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Osanchez",
+    "url": "https://github.com/Osanchez"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/Osanchez/Flowestra",
+  "homepage": "https://github.com/Osanchez/Flowestra"
+}
