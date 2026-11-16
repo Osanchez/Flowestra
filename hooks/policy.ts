@@ -112,8 +112,9 @@ Every brief states: TASK, SCOPE (including what is out of scope), TARGETS or
 ACCEPTANCE CRITERIA, CHECK (what will verify the result), STOP WHEN, and the
 return schema for that tier.
 Sonnet and Haiku briefs also carry this rule: "If the task needs a decision
-the brief doesn't make, touches anything in §2, or goes outside SCOPE, stop
-and return BLOCKED with the reason. Do not resolve it yourself."
+the brief doesn't make (including any security, auth, migration,
+data-deletion or cross-repository contract decision), or goes outside SCOPE,
+stop and return BLOCKED with the reason. Do not resolve it yourself."
 
 ## 6. Return schemas
 Haiku:

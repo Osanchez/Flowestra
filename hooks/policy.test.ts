@@ -102,7 +102,7 @@ describe('the policy text', () => {
     expect(ROUTING_POLICY_TEXT).toContain('\n<task> | <tier> | <§1 step and conditions that selected it> | <what catches an error>\n')
     expect(ROUTING_POLICY_TEXT.endsWith(last)).toBe(true)
     expect(ROUTING_POLICY_TEXT.endsWith('\n')).toBe(false)
-    expect(ROUTING_POLICY_TEXT.split('\n').length).toBe(93)
+    expect(ROUTING_POLICY_TEXT.split('\n').length).toBe(94)
     expect(ROUTING_POLICY_TEXT).toContain('Writing (edit, implement, tests, fix, docs) goes to Sonnet even under a §2\ntrigger: triggers decide who designs and reviews it, not who writes it.')
     expect(ROUTING_POLICY_TEXT).toContain('design-level assumption: Opus. Writing instead: you, or an Opus debug worker,\n  tighten the spec; Sonnet retries once under a new unit, then ask the user.')
     expect(ROUTING_POLICY_TEXT).toContain('tier up for the rest of the session, writing excepted.')
@@ -137,9 +137,13 @@ describe('the slices', () => {
   test('OPUS_SCHEMA_NOTE: the whole Opus line', () => {
     expect(OPUS_SCHEMA_NOTE).toBe("Opus: same as Sonnet, plus ALTERNATIVES_REJECTED for design work; a design's detail goes in its draft file.")
   })
+  test('BLOCKED_RULE no longer mentions §2', () => {
+    expect(BLOCKED_RULE).not.toContain('§2')
+  })
+
   test('BLOCKED_RULE: the §5 sentence, whitespace collapsed', () => {
     expect(BLOCKED_RULE).toBe(
-      "If the task needs a decision the brief doesn't make, touches anything in §2, or goes outside SCOPE, stop and return BLOCKED with the reason. Do not resolve it yourself.",
+      "If the task needs a decision the brief doesn't make (including any security, auth, migration, data-deletion or cross-repository contract decision), or goes outside SCOPE, stop and return BLOCKED with the reason. Do not resolve it yourself.",
     )
   })
   test('the schema slices sit in the policy text as §6 lays them out', () => {
