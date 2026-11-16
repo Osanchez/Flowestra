@@ -26,21 +26,19 @@ Flowestra is for work where you want control over which model does what, and a r
 **When not to use it**
 
 - **A quick one-line or one-file fix.** The overhead and a worker's cold start buy you little; plain Claude Code is simpler.
-- **Fully unattended runs with `full`.** It stops for your approval. Use `light`, or state the approval up front.
+- **Runs nobody will answer.** Approval and failed retries stop for you; state the approval up front, and expect a question if a writing unit fails twice.
 - **Work that needs the built-in agent types (Explore, Plan, general-purpose and the rest).** They are unavailable while the mod is loaded.
 
 ## Limitations
 
-- **Fixed prompt overhead.** About 9k tokens of instructions are added to every request of the lead, mostly read from cache.
-- **Workers start cold.** Each rereads the files it needs, and work that fails at Sonnet is rerun on Opus, which adds tokens; a writing unit is instead retried once on Sonnet with a tightened spec, then you are asked.
-- **More output, and slower on single-repository work.** In the benchmark, total output rose 9–36% on every task, and wall-clock time rose 15–16% on the single-repository tasks, against a plain session.
-- **Savings depend on the task's length.** Total tokens fell only where a plain session would loop for a long time (−22% on the larger task). On the short ones a worker's cold start about cancels the saving.
-- **Small evidence base.** The benchmark is 3 runs per cell, with tasks of about 2–10 minutes: two in one repository and one across three small repositories. Hours-long work has not been measured yet.
-- **No counterfactual in the Tokens tab.** It shows what was spent, not what the same work would have used without the mod.
-- **The gate only sees agent starts.** Workflow agents, skills that run in their own agent, and agents started before the board loaded run unchecked; they are marked, not refused. See "What the gate does not check".
-- **The journal is plain text.** Briefs and results are stored unencrypted on your machine, and secret masking is best effort.
-- **The approval gate needs you.** In `full`, implementation waits for your approval.
-- **Surfaces.** The pane has been checked in the terminal; the desktop app shows a simpler fallback view. A Claude Code build that supports mods is required (tested on 2.1.325).
+- **Overhead on short tasks.** About 9k tokens of instructions ride on every lead request (mostly cached), and each worker starts cold. On a short task that about cancels the saving: the benchmark's small task came out even (+4% in dollars), while the larger and multi-repo tasks cost 16% and 5% less.
+- **More output, and longer single-repository runs.** A worker writes and the lead reviews, so output rose 9–36% and single-repository wall-clock 15–16%.
+- **Enforcement has edges.** The gate checks agent starts: it refuses off-policy workers, including an Opus worker that would write code. The lead's own edits are held to "Sonnet writes" by its instructions only, and workflow agents and skills that run their own agent are marked, not refused (see "What the gate does not check").
+- **Unattended runs can stop for you.** `full` waits for your approval of the design, and in any workflow a writing unit that fails its one Sonnet retry stops and asks you.
+- **Measured on short tasks.** 3 runs per cell, tasks of 2–10 minutes. Hours-long work is unmeasured, and the Tokens tab shows tokens, not dollars or what the work would have cost without the mod.
+- **Journal caveats.** Briefs and results are stored as plain text (secret masking is best effort), and a session opened before you clean the journal can write deleted entries back into its index.
+
+The pane is checked in the terminal; the desktop app shows a simpler view.
 
 ## Token cost, measured
 
@@ -53,7 +51,7 @@ Measured on 18 fresh sessions (Flowestra 0.17.0, Opus 5.5 lead, 3 runs per cell,
 | Three repositories, one shared contract | 1.81M tokens | 2.00M tokens | +10% (within spread) | −5% | −17% |
 | Fixed cost per request | | | +9k tokens, mostly cached | | |
 
-Delegation happens on its own: in all 9 runs Sonnet workers wrote every change, no Opus worker ran, and the lead edited no project file. The Opus share fell on every task. Total tokens fell on the larger task and were about even on the other two. In dollars at list prices, which weigh Opus and Sonnet tokens by their price, the larger task cost 16% less, the three-repository task 5% less and the small one 4% more. Output was higher on every task, by 9–36%. The three-repository task finished 29% faster, because its units ran in parallel. The tests passed in every run, including a hidden 40-test acceptance suite on the multi-repo task. The sample is small (3 runs per cell).
+Delegation happens on its own: in all 9 runs Sonnet workers wrote every change, no Opus worker ran, and the lead edited no project file. The Opus share fell on every task. Total tokens fell on the larger task and were about even on the other two. In dollars at list prices, which weigh Opus and Sonnet tokens by their price, the larger task cost 16% less, the three-repository task 5% less and the small one 4% more. Output was higher on every task, by 9–36%. The three-repository task finished 29% faster, because its units ran in parallel. The tests passed in every run, including a hidden 40-test acceptance suite on the multi-repo task. The sample is small (3 runs per cell). The current version, 0.17.1, changes only the rule workers follow when a brief leaves a high-risk decision open; it was not re-measured, and no benchmark run hit the old rule.
 
 **[Full benchmark: method, every run, benefits, limitations and when it's worth it →](docs/BENCHMARK.md)**
 
