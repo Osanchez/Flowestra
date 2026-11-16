@@ -676,13 +676,25 @@ export const BOARD_COMMAND_TEXT: Record<BoardToggleResult, string> = {
     'Agent Board will appear once the terminal is wide enough; meanwhile the one-line row above the prompt shows the board.',
 }
 
+/** `/board`'s registered description and argument hint. */
+export const BOARD_COMMAND_DESCRIPTION = 'Open or close the Agent Board; /board tokens for the token report'
+export const BOARD_COMMAND_HINT = '[tokens]'
+
+/** What `/board tokens` answers once its lines are written (the lines themselves are not sent to the model). */
+export const REPORT_DONE_TEXT =
+  'Agent Board: token report written as dim lines in the transcript; they are not sent to the model.'
+/** What `/board` answers to an argument it does not know; the pane is not toggled. */
+export const BOARD_USAGE_TEXT = '/board opens or closes the pane; /board tokens writes the token report.'
+/** What `/board tokens` answers when the report could not be made. */
+export const REPORT_FAILED_TEXT = 'Agent Board: the token report could not be made.'
+
 /**
  * Registers `/board`. Call it from the mod's one `session.start` hook, as
  * `registerBoardTool`. Never throws.
  */
 export async function registerBoardCommand($: EngineInterface): Promise<void> {
   try {
-    await $.command.register({ name: BOARD_COMMAND, description: 'Open or close the Agent Board' })
+    await $.command.register({ name: BOARD_COMMAND, description: BOARD_COMMAND_DESCRIPTION, argumentHint: BOARD_COMMAND_HINT })
   } catch (error) {
     $.ui.log(`flowestra: /board not registered: ${String(error)}`)
   }

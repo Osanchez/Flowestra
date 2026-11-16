@@ -182,12 +182,17 @@ import { failureText } from './prune'
 export { entryFromText } from './journal'
 import {
   answerBoardCall,
+  BOARD_USAGE_TEXT,
+  REPORT_DONE_TEXT,
+  REPORT_FAILED_TEXT,
   boardCommandText,
   registerBoardCommand,
   registerBoardTool,
+  toolArguments,
   wantsBoardSection,
   withFlowestraSections,
 } from './board'
+import { injectedParts, usageReport } from './report'
 import { modelsFromOptions, modelsNote } from './models'
 import { workflowMode } from './workflow'
 import type { BoardToggleResult, BoardUpdate } from './board'
@@ -197,6 +202,7 @@ import {
   MAIN_ID,
   anythingLingering,
   anythingRunning,
+  applyBoardSent,
   applyBoardUpdate,
   applyComplete,
   applySpawn,
@@ -1303,7 +1309,7 @@ async function otherSessionLine($: EngineInterface, board: Board, at: number): P
  * a `task` line, else refused. A newly opened task with no `repo` gets that
  * default. The journal is then written through its queue.
  */
-async function boardToolUpdate($: EngineInterface, change: BoardUpdate, line: string): Promise<{ deny: string } | { text: string }> {
+async function boardToolUpdate($: EngineInterface, change: BoardUpdate, line: string, chars = 0): Promise<{ deny: string } | { text: string }> {
   const at = await now($)
   const before = await read($, boardAtom)
   const id = change.taskId
@@ -1332,9 +1338,11 @@ async function boardToolUpdate($: EngineInterface, change: BoardUpdate, line: st
     }
   }
   const resumed = stored
+  // the task the update named, else the one active before it ('' = none): where its characters are counted
+  const sentKey = applied.taskId ?? before.taskId ?? ''
   await changeBoard(
     $,
-    b => applyBoardUpdate(resumed !== null && slotOf(b, resumed.taskId) === null ? openTask(b, resumed, at) : b, applied, at),
+    b => applyBoardSent(applyBoardUpdate(resumed !== null && slotOf(b, resumed.taskId) === null ? openTask(b, resumed, at) : b, applied, at), sentKey, chars),
     at,
   )
   const after = await read($, boardAtom)
@@ -1619,7 +1627,13 @@ export const register: Register = (on, options) => {
     if ('deny' in answer) return { deny: answer.deny }
     const barred = await barredRefusal($, answer.update.units)
     if (barred !== null) return { deny: barred }
-    const done = await boardToolUpdate($, answer.update, answer.line)
+    let chars = 0
+    try {
+      chars = JSON.stringify(toolArguments(e)).length
+    } catch {
+      chars = 0
+    }
+    const done = await boardToolUpdate($, answer.update, answer.line, chars)
     return 'deny' in done ? { deny: done.deny } : { result: done.text }
   }).catch(() => ({ deny: 'AgentBoard could not update the board; it keeps its previous value' }))
 
@@ -1871,9 +1885,18 @@ export const register: Register = (on, options) => {
     return closed
   })
 
-  on('command.run', { command: 'board' }, async $ => ({ text: boardCommandText(await toggleBoard($)) })).catch(
-    () => ({ text: 'Agent Board: the pane could not be opened or closed.' }),
-  )
+  // `/board` toggles the pane; `/board tokens` writes the token report as dim lines (not sent to the model).
+  on('command.run', { command: 'board' }, async ($, e) => {
+    const arg = String(e.args ?? '').trim().toLowerCase()
+    if (arg === '') return { text: boardCommandText(await toggleBoard($)) }
+    if (arg !== 'tokens') return { text: BOARD_USAGE_TEXT }
+    const lines = usageReport(await read($, boardAtom), injectedParts(mode, modelsNote(models)))
+    for (const line of lines) await $.ui.log(line)
+    return { text: REPORT_DONE_TEXT }
+  }).catch(($, e) => {
+    const arg = String(e.args ?? '').trim().toLowerCase()
+    return { text: arg === 'tokens' ? REPORT_FAILED_TEXT : 'Agent Board: the pane could not be opened or closed.' }
+  })
 
   // `/journal` (upkeep.ts): status, prune, check. The event's args and origin go
   // through as received (only the person's own keystroke can confirm a prune);

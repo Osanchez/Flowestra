@@ -19,6 +19,7 @@ export type AgentBox = {
   startedAt: number | null; endedAt: number | null; lastEventAt: number | null
   lastTool: string | null
   briefChars: number | null; resultChars: number | null   // sizes of what went out and came back
+  peakIn: number | null      // the largest input (new + cached) of one request; null: no usage yet
   flow: { dir: 'out' | 'in' | null; at: number | null }   // last transfer, for the arrow highlight
   taskId: string | null      // the task (workstream) it was spawned under; null: none was open
   routed: Routed | null      // what its covering unit said when it started; null: no unit covered it
@@ -101,6 +102,8 @@ export type Board = {
   parked: TaskSlot[]                                                 // the other open tasks
   closed: TaskSlot[]                                                 // tasks closed this session
   activeAt: number                                                   // epoch ms the active task became active
+  leadByTask: Record<string, Tokens>                                 // the lead's tokens by the task active at each request; '' = no task open
+  boardSent: Record<string, { calls: number; chars: number }>        // AgentBoard calls applied, by task; '' = none
 }
 
 // What the pane draws from besides the board: the clock tick and whether the

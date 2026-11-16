@@ -2,7 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import type { AgentBox, Board, Detail, FlowProps, GateHealth, Live, Log, RowCard, Tier, Ui } from '../types'
 import { gateAnswerLine, gateNotice, strictRefusal } from './gate'
-import { BOARD_PROMPT_SECTION, BOARD_TOOL_FULL_NAME, POLICY_SECTION_ID } from './board'
+import { BOARD_COMMAND_DESCRIPTION, BOARD_COMMAND_HINT, BOARD_PROMPT_SECTION, BOARD_TOOL_FULL_NAME, BOARD_USAGE_TEXT, POLICY_SECTION_ID, REPORT_DONE_TEXT, REPORT_FAILED_TEXT } from './board'
+import { injectedParts, usageReport } from './report'
 import { WORKFLOW_SECTION_ID, workflowText } from './workflow'
 import { modelsFromOptions, modelsNote } from './models'
 import {
@@ -72,6 +73,7 @@ type World = {
   spawnCalls: number // spawns that reached the engine
   spawnModel: string | null // what a spawn runs on; null: what the call asks for
   oldLive: boolean
+  hollowBoard: boolean // the stored board has no agents list: the token report cannot be made from it (0.12.0)
   corruptBoard: boolean // reads of `board` answer a board with no units or rejects lists
   reads: string[] // the keys read, in order
   boardGate: Promise<void> | null // the next board write waits for this, then the gate is gone
@@ -140,7 +142,10 @@ function engine(on: any, w: World) {
     // a hook that throws is skipped by the kit, so a failing read cannot be staged:
     // a stored board of the right shape with no units list makes the plugin's check throw instead
     if (w.corruptBoard && e.key === 'board') {
-      return { value: { value: { shape: 'board-6', value: { taskId: null, repo: null, task: null, phase: null, wave: null, units: null, agents: {}, order: [], loadedAt: T0, note: null, rejects: null, parked: null, closed: null, activeAt: T0 } }, version: 99 } }
+      return { value: { value: { shape: 'board-7', value: { taskId: null, repo: null, task: null, phase: null, wave: null, units: null, agents: {}, order: [], loadedAt: T0, note: null, rejects: null, parked: null, closed: null, activeAt: T0 } }, version: 99 } }
+    }
+    if (w.hollowBoard && e.key === 'board') {
+      return { value: { value: { shape: 'board-7', value: { taskId: null, units: null, agents: null, order: null, leadByTask: null, boardSent: null } }, version: 99 } }
     }
     // a live value stored by the earlier shape (live-1), which had a cost text
     if (w.oldLive && e.key === 'live') {
@@ -229,7 +234,7 @@ function engine(on: any, w: World) {
 function world(over: Partial<World> = {}): World {
   return {
     panes: [], placeOnOpen: true, opens: 0, list: [], listCalls: 0, board: null, live: null, detail: null, ui: null, log: null,
-    liveWrites: 0, animWrites: 0, failWrites: false, failLogWrites: false, spawnCalls: 0, spawnModel: null, corruptBoard: false, oldLive: false, reads: [],
+    liveWrites: 0, animWrites: 0, failWrites: false, failLogWrites: false, spawnCalls: 0, spawnModel: null, corruptBoard: false, hollowBoard: false, oldLive: false, reads: [],
     boardGate: null, units: [], registered: [], files: {}, fsWrites: [], failFsWrite: false, failExists: false, env: { HOME },
     mtimes: {}, root: '/work/main', repo: null, failJournal: false, spawned: [], ghosts: [], gate: null, uiLogs: [], commands: [],
     ...over,
@@ -1246,7 +1251,7 @@ test('a turn completing clears the worker runs', async ($, on) => {
   const clock = engine(on, w)
   await start($)
   await work($, w, 'Busy worker')
-  void $.tool.call({ tool: 'Bash', command: 'sleep 100', agentId: 'agent-busy' } as any)
+  $.tool.call({ tool: 'Bash', command: 'sleep 100', agentId: 'agent-busy' } as any).catch(() => undefined)
   await clock.settle()
   expect(detailOf(w).agents['agent-busy']!.tools).toHaveLength(1)
   await clock.advance(3000)
@@ -2483,4 +2488,105 @@ test('/journal prune ... confirm from an origin that is not the person\'s keystr
   }
   expect(runs).toEqual([])
   expect(w.files).toEqual(before)
+})
+
+// ---------------------------------------------------------------- 0.12.0: token figures (wiring)
+
+test('AgentBoard: a call with units records boardSent under the active task: one call, the argument characters', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  const args = { task: 'Count it', phase: 'executing', units: [unit('u1')] }
+  const r: any = await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, ...args } as any)
+  expect(r.result).toMatch(/board updated/)
+  const key = boardOf(w).taskId ?? ''
+  expect(key).not.toBe('')
+  expect(boardOf(w).boardSent[key]).toEqual({ calls: 1, chars: JSON.stringify(args).length })
+  const more = { phase: 'testing' }
+  await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, ...more } as any)
+  expect(boardOf(w).boardSent[key]).toEqual({ calls: 2, chars: JSON.stringify(args).length + JSON.stringify(more).length })
+})
+
+test('AgentBoard: a refused call records nothing', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, task: 'Count it', phase: 'executing' } as any)
+  const before = JSON.stringify(boardOf(w).boardSent)
+  const r: any = await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, phase: 'testing', agentId: 'agent-x' } as any)
+  expect(r.deny).toMatch(/only the orchestrator/)
+  expect(JSON.stringify(boardOf(w).boardSent)).toBe(before)
+})
+
+test('AgentBoard: a call that opens task x counts under x', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  const args = { taskId: 'wb-x', task: 'Open x', phase: 'design' }
+  await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, ...args } as any)
+  expect(boardOf(w).taskId).toBe('wb-x')
+  expect(boardOf(w).boardSent['wb-x']).toEqual({ calls: 1, chars: JSON.stringify(args).length })
+  expect(boardOf(w).boardSent['']).toBeUndefined()
+})
+
+async function runBoard($: any, args: string) {
+  return $.command.run({ command: 'board', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+}
+
+test('/board tokens writes the report one ui.log per line, answers REPORT_DONE_TEXT and does not toggle', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, task: 'Count it', phase: 'executing' } as any)
+  const opens = w.opens
+  w.uiLogs.length = 0
+  const r: any = await runBoard($, '  Tokens ')
+  expect(r.text).toBe(REPORT_DONE_TEXT)
+  const expected = usageReport(boardOf(w), injectedParts('full', modelsNote(modelsFromOptions({}))))
+  expect(expected.length).toBeGreaterThan(0)
+  expect(w.uiLogs).toEqual(expected)
+  expect(w.opens).toBe(opens)
+  expect(w.panes).toHaveLength(0)
+  expect((await runBoard($, 'tokens')).text).toBe(REPORT_DONE_TEXT)
+})
+
+test('/board toggles as before and /board foo answers BOARD_USAGE_TEXT without toggling', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  const r: any = await runBoard($, 'foo')
+  expect(r.text).toBe(BOARD_USAGE_TEXT)
+  expect(w.panes).toHaveLength(0)
+  expect(w.opens).toBe(0)
+  expect((await runBoard($, '')).text).toBe('Agent Board opened.')
+  expect(w.panes).toHaveLength(1)
+  expect((await runBoard($, 'foo bar')).text).toBe(BOARD_USAGE_TEXT)
+  expect(w.panes).toHaveLength(1)
+})
+
+// A hook of the test world that throws is skipped by the kit (see corruptBoard), so a failing $.ui.log cannot be
+// staged; a stored board the report cannot be made from fails the same try, the one around the whole report path.
+test('/board tokens with the report failing answers the failure text and the session goes on', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, task: 'Count it', phase: 'executing' } as any)
+  w.hollowBoard = true
+  w.uiLogs.length = 0
+  const r: any = await runBoard($, 'tokens')
+  expect(r.text).toBe('Agent Board: the token report could not be made.')
+  expect(r.text).toBe(REPORT_FAILED_TEXT)
+  expect(w.uiLogs).toEqual([])
+  w.hollowBoard = false
+  expect((await runBoard($, '')).text).toBe('Agent Board opened.')
+})
+
+test('/board is registered with argumentHint [tokens] and the new description', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  const c = w.commands.find(x => x.name === 'board')
+  expect(c).toMatchObject({ description: 'Open or close the Agent Board; /board tokens for the token report', argumentHint: '[tokens]' })
+  expect(BOARD_COMMAND_DESCRIPTION).toBe(c.description)
+  expect(BOARD_COMMAND_HINT).toBe('[tokens]')
 })

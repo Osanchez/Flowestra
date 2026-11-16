@@ -13,6 +13,7 @@ import {
   REFUSED_BUILTINS,
   anythingLingering,
   anythingRunning,
+  applyBoardSent,
   applyBoardUpdate,
   applyComplete,
   applySpawn,
@@ -412,7 +413,7 @@ test('resetBoard empties everything', () => {
 
 test('a reload keeps the tallies: the board is plain data under a shape tag', () => {
   // $.state keeps the value whole across a hot reload; the atom's tag decides whether new code takes it.
-  expect(boardAtom.shape).toBe('board-6')
+  expect(boardAtom.shape).toBe('board-7')
   expect(boardAtom.initial).toEqual(emptyBoard(0))
   const before = applyStep(applyStep(spawned(emptyBoard(T0), 'a'), 'a', usage(1, 2, 3, 4), T0), undefined, usage(5, 6, 7, 8), T0)
   const reloaded = JSON.parse(JSON.stringify(before)) as Board
@@ -486,6 +487,7 @@ const mk = (id: string, status: AgentBox['status'], endedAt: number | null = nul
   lastTool: null,
   briefChars: null,
   resultChars: null,
+  peakIn: null,
   flow: { dir: null, at: null },
   taskId: null,
   routed: null,
@@ -1829,8 +1831,70 @@ const routedBox = (id: string, unitId: string, model: string | null, routed: Rou
 })
 const AUDIT = 'find the callers | opus | §1 | re-read'
 
-test('the board shape tag is board-6', () => {
-  expect(BOARD_SHAPE).toBe('board-6')
+test('the board shape tag is board-7', () => {
+  expect(BOARD_SHAPE).toBe('board-7')
+})
+
+test('board-7: an empty board has leadByTask and boardSent; a new box has peakIn null', () => {
+  const b = emptyBoard(5)
+  expect(b.leadByTask).toEqual({})
+  expect(b.boardSent).toEqual({})
+  expect(box(spawned(b, 'a'), 'a').peakIn).toBeNull()
+})
+
+test('applyStep: peakIn is the largest request; the lead is split by the task active at each request', () => {
+  let b: Board = { ...emptyBoard(T0), taskId: 'a' }
+  b = applyStep(b, undefined, usage(100, 10, 300, 200), T0)
+  b = applyStep(b, undefined, usage(1000, 5, 0, 0), T0)
+  expect(box(b, 'main').tokens).toEqual({ input: 1100, output: 15, cacheRead: 300, cacheWrite: 200, requests: 2 })
+  expect(box(b, 'main').peakIn).toBe(1000)
+  expect(b.leadByTask['a']).toEqual(box(b, 'main').tokens!)
+  b = applyStep({ ...b, taskId: 'b' }, undefined, usage(7, 1, 2, 3), T0)
+  expect(b.leadByTask['b']).toEqual({ input: 7, output: 1, cacheRead: 2, cacheWrite: 3, requests: 1 })
+  expect(b.leadByTask['a']!.requests).toBe(2)
+  const none = applyStep(emptyBoard(T0), undefined, usage(1, 1, 1, 1), T0)
+  expect(Object.keys(none.leadByTask)).toEqual([''])
+  // a null usage changes neither field
+  const nul = applyStep(b, undefined, null, T0 + 1)
+  expect(nul.leadByTask).toEqual(b.leadByTask)
+  expect(box(nul, 'main').peakIn).toBe(1000)
+  expect(box(applyStep(emptyBoard(T0), undefined, null, T0), 'main').peakIn).toBeNull()
+})
+
+test('applyStep: a worker step sets its own peakIn and never touches leadByTask', () => {
+  const b = applyStep(spawned({ ...emptyBoard(T0), taskId: 'a' }, 'w'), 'w', usage(10, 2, 20, 30), T0)
+  expect(box(b, 'w').peakIn).toBe(60)
+  expect(b.leadByTask).toEqual({})
+})
+
+test('applySpawn: a resume adds its message length to briefChars; a new id keeps its own', () => {
+  const first = applySpawn(emptyBoard(T0), { agentId: 'r', description: 'Work', promptChars: 100 }, T0)
+  const resumed = applySpawn(first, { agentId: 'r', description: 'Work', promptChars: 30, resumed: true }, T0 + 1)
+  expect(box(resumed, 'r').briefChars).toBe(130)
+  const other = applySpawn(resumed, { agentId: 's', description: 'Work', promptChars: 40 }, T0 + 2)
+  expect(box(other, 's').briefChars).toBe(40)
+})
+
+test('applyComplete: each run answer is added to resultChars once; no length stays null', () => {
+  let b = applySpawn(emptyBoard(T0), { agentId: 'r', description: 'Work', promptChars: 1 }, T0)
+  b = applyComplete(b, 'r', { reason: 'answer', answerChars: 50 }, T0 + 1)
+  expect(box(b, 'r').resultChars).toBe(50)
+  b = applyComplete(b, 'r', { reason: 'answer', answerChars: 99 }, T0 + 2) // the same ended run
+  expect(box(b, 'r').resultChars).toBe(50)
+  b = applySpawn(b, { agentId: 'r', description: 'Work', promptChars: 1, resumed: true }, T0 + 3)
+  b = applyComplete(b, 'r', { reason: 'answer', answerChars: 20 }, T0 + 4)
+  expect(box(b, 'r').resultChars).toBe(70)
+  const n = applyComplete(applySpawn(emptyBoard(T0), { agentId: 'q', description: 'Work' }, T0), 'q', { reason: 'answer', answerChars: null }, T0 + 1)
+  expect(box(n, 'q').resultChars).toBeNull()
+})
+
+test('applyBoardSent: counts calls and characters by task; negative characters add 0', () => {
+  let b = applyBoardSent(emptyBoard(T0), 'a', 120)
+  b = applyBoardSent(b, 'a', 120)
+  expect(b.boardSent['a']).toEqual({ calls: 2, chars: 240 })
+  b = applyBoardSent(b, 'a', -5)
+  expect(b.boardSent['a']).toEqual({ calls: 3, chars: 240 })
+  expect(applyBoardSent(emptyBoard(T0), '', 7).boardSent['']).toEqual({ calls: 1, chars: 7 })
 })
 
 test('spawnCheck with Opus off: the opus worker runs on sonnet; a model parameter must be sonnet', () => {

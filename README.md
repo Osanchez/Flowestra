@@ -88,7 +88,7 @@ claude plugin install flowestra --marketplace Osanchez/Flowestra
 
 In the desktop app: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `Osanchez/Flowestra`, then **Add plugin**.
 
-The pane opens by itself when workers start. `/board` opens or closes it.
+The pane opens by itself when workers start. `/board` opens or closes it. `/board tokens` prints the token report.
 
 `/journal` shows the journal's size and settings. `/journal prune <days>` shows which closed tasks and audit files are that old and what deleting them would free; nothing is deleted until you type the confirmation it prints, which only works when you type it yourself. Open tasks are kept; one you abandoned can be deleted by name with `/journal prune task <repo>/<task>`. `/journal check` finds entries missing from the indexes, restores damaged task state files from their backup, and rebuilds the indexes. It deletes only task folders and audit files inside the mod's own `flowestra` folder in your Claude Code config folder, never anything in a project, and where it cannot delete (outside the terminal, or on Windows) it lists the folders for you to remove.
 
@@ -198,6 +198,16 @@ The pane is a flow diagram, top to bottom: the lead's box, the plan box (phase, 
 
 On a narrow terminal a one-line row above the prompt stands in for the pane.
 
+## Token figures
+
+A line under the status line shows this task's tokens: the lead's and the delegated workers', and the share delegated. `/board tokens` writes a fuller report into the transcript as dim lines, which the model does not read.
+
+What is counted: every model request the board saw, with the four numbers the API reports (new input, cache writes, cache reads, output), by the model that answered. "in" adds new input, cache writes and cache reads; cache reads are counted at full size and never weighed. The lead's tokens are split by the task that was active at each request. Counts start when the board starts (session start or /clear) and live in memory only.
+
+What the report adds: the largest context each worker held, against the characters its answer brought back; runs whose unit was rejected, and repeated runs of a unit; the characters of briefs and board updates (already part of the lead's output); the length of Flowestra's own text in the lead's prompt, in characters.
+
+What it cannot tell you: how many tokens the same work would have used without Flowestra. There is no run without it to compare with, so the board shows no comparison and no score. A worker's requests are extra requests; what delegation gives is a smaller lead context, and the report shows both sides. Requests outside agent turns, such as compaction summaries and the engine's own side requests, may not be counted, and a resumed session starts from zero.
+
 ## Where files live
 
 Flowestra keeps its files under Claude Code's config folder: the `CLAUDE_CONFIG_DIR` environment variable when it is set, otherwise `~/.claude`.
@@ -227,7 +237,7 @@ claude plugin test <folder>       # runs every *.test.ts
 claude plugin validate <folder>   # reads the manifest and type-checks the module
 ```
 
-The module is `hooks/register.tsx`; everything else under `hooks/` is pure and tested on its own: `policy.ts` (the policy text), `workflow.ts` (the workflow text and the `workflow` setting), `workers.ts` (the three worker types), `models.ts` (the worker model settings and their cascade), `board.ts` (the tool's parser), `state.ts` (the board's reducers and the gate), `journal.ts` (the journal's formats), `log.ts`, `view.tsx` and `flow.client.tsx` (the drawing), `gate.ts` (the gate's health and texts), `redact.ts` (masking and storing less), `prune.ts` (what `/journal` may delete and every text it prints), `journal-fs.ts` (the journal's file layer), `upkeep.ts` (`/journal`), `guard.ts` (the guarded-check helpers).
+The module is `hooks/register.tsx`; everything else under `hooks/` is pure and tested on its own: `policy.ts` (the policy text), `workflow.ts` (the workflow text and the `workflow` setting), `workers.ts` (the three worker types), `models.ts` (the worker model settings and their cascade), `board.ts` (the tool's parser), `state.ts` (the board's reducers and the gate), `journal.ts` (the journal's formats), `log.ts`, `view.tsx` and `flow.client.tsx` (the drawing), `gate.ts` (the gate's health and texts), `redact.ts` (masking and storing less), `prune.ts` (what `/journal` may delete and every text it prints), `journal-fs.ts` (the journal's file layer), `upkeep.ts` (`/journal`), `guard.ts` (the guarded-check helpers), `usage.ts` (the token figures), `report.ts` (the `/board tokens` text).
 
 ## License
 

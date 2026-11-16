@@ -17,6 +17,7 @@ import type { BoxProps, ButtonProps, ElementConstructor, RenderElement, TextProp
 import type { AgentBox, Board, GateHealth, BoxStatus, Detail, FlowProps, Log, LogKind, Row, RowCard, RowCardStatus, Tier, Tokens, Ui, Unit } from '../types'
 import { gateBandPart, gateStatusValue, isDegraded, UNGATED_SHORT } from './gate'
 import { auditParts } from './policy'
+import { hasUsage, usageScope } from './usage'
 import {
   auditIssue,
   feederUnits,
@@ -83,7 +84,8 @@ const MAX_CARD = 28
  * the legend, the lead box, the plan box with its stem, the leads row (label,
  * fan-out rail, arrows, cards, fan-in rail, feed label), the stem between the
  * two rows, the workers row (label, rail, arrows, cards, rail), the stem drawn
- * when there is no worker card, the return box and the status line.
+ * when there is no worker card, the return box, the status line and the
+ * optional tokens line below it.
  */
 export const ROWS = {
   header: 1,
@@ -96,6 +98,7 @@ export const ROWS = {
   noWorkers: 1,
   back: 4,
   status: 1,
+  usage: 1,
 } as const
 // Rows the full session log takes besides its entries: two border rows and the title.
 export const LOG_FRAME_ROWS = 3
@@ -896,16 +899,72 @@ function footerLines(vm: ViewModel): string[] {
   return lines
 }
 
+// ---------------------------------------------------------------- the tokens line
+
+/**
+ * The tokens line's candidate texts for the active task, widest first (spec 5.1).
+ * Every figure is a measured count; a count carries a leading `≥` when its side
+ * is partial. Empty when the board has no counts.
+ */
+export function usageCandidates(vm: ViewModel): string[] {
+  if (!hasUsage(vm.board)) return []
+  const u = usageScope(vm.board, 'task')
+  const L = u.lead.tokens
+  const workers = u.rows.reduce((n, r) => n + r.agents, 0) + u.unknownAgents
+  const Lin = L === null ? 0 : L.input + L.cacheWrite + L.cacheRead
+  const Lout = L === null ? 0 : L.output
+  let Din = 0
+  let Dout = 0
+  for (const r of u.rows) {
+    Din += r.tokens.input + r.tokens.cacheWrite + r.tokens.cacheRead
+    Dout += r.tokens.output
+  }
+  const dPartial = u.partialAgents > 0 || (u.unknownAgents > 0 && u.rows.length > 0)
+  const lead = (n: number): string => formatCount(n)
+  const del = (n: number): string => (dPartial ? '≥' : '') + formatCount(n)
+  const p = u.share === null ? null : u.share.all
+  const leadIn = `lead in ${lead(Lin)} out ${lead(Lout)}`
+  const leadSum = `lead ${lead(Lin + Lout)}`
+  if (workers === 0) return [`tokens · ${leadIn} · nothing delegated yet`, leadIn, leadSum]
+  const delIn = `delegated in ${del(Din)} out ${del(Dout)}`
+  const delSum = `delegated ${del(Din + Dout)}`
+  return [
+    `tokens · ${leadIn} · ${delIn}${p !== null ? ` · ${p}% delegated` : ''}`,
+    `${leadIn} · ${delIn}${p !== null ? ` · ${p}%` : ''}`,
+    `${leadIn} · ${delIn}`,
+    `tokens · ${leadSum} · ${delSum}${p !== null ? ` · ${p}%` : ''}`,
+    p !== null ? `${p}% of tokens delegated` : delSum,
+    p !== null ? `${p}% delegated` : delSum,
+  ]
+}
+
+/** The tokens line's text: the first candidate that fits the pane's width, else the last (cut by the Text). */
+export function usageLineText(vm: ViewModel): string | null {
+  const candidates = usageCandidates(vm)
+  if (candidates.length === 0) return null
+  return candidates.find(c => [...c].length <= vm.width) ?? (candidates[candidates.length - 1] as string)
+}
+
+function drawUsage(el: El, vm: ViewModel, text: string): RenderElement {
+  const { Box, Text } = el
+  return (
+    <Box key="usage" width={vm.width}>
+      <Text wrap="truncate-end" dimColor>{text}</Text>
+    </Box>
+  )
+}
+
 // ---------------------------------------------------------------- the pane
 
-export type PaneFit = { plan: boolean; log: 'full' | 'compact' | 'none'; logLines: number; footer: number }
+export type PaneFit = { plan: boolean; usage: boolean; log: 'full' | 'compact' | 'none'; logLines: number; footer: number }
 
 /**
  * What fits on the pane, by exact row accounting (pure). The fixed rows are the
  * header, the legend, the flow without its plan box (lead box, each tier shown
  * and its stems, return box), the selected card's detail strip and the status
  * line: these are never pushed out. The plan box comes next when its rows fit,
- * then the full session log, else the compact log with as many of its newest
+ * then the tokens line when it has counts to show, then the full session log,
+ * else the compact log with as many of its newest
  * entries (up to LOG_COMPACT_SHOWN) as the rows left allow, else no log. The
  * notes come last: `footer` is how many of them fit in the rows left over.
  * With the height unknown: the plan box, the full log and every note.
@@ -914,10 +973,11 @@ export function paneFit(vm: ViewModel): PaneFit {
   const entries = vm.log.entries.length
   const fullLines = Math.min(LOG_SHOWN, entries)
   const notes = footerLines(vm).length
+  const counted = hasUsage(vm.board)
   if (vm.height === null) {
     return entries > 0
-      ? { plan: true, log: 'full', logLines: fullLines, footer: notes }
-      : { plan: true, log: 'none', logLines: 0, footer: notes }
+      ? { plan: true, usage: counted, log: 'full', logLines: fullLines, footer: notes }
+      : { plan: true, usage: counted, log: 'none', logLines: 0, footer: notes }
   }
   const leadsShown = rowLeads(vm.board, vm.now).length > 0
   const workersShown = rowWorkers(vm.board, vm.now).length > 0
@@ -929,16 +989,18 @@ export function paneFit(vm: ViewModel): PaneFit {
   const box = selectedBox(vm)
   if (box !== undefined) fixed += DETAIL_FRAME_ROWS + detailLines(vm, box, detailInner(vm)).length
   const plan = fixed + ROWS.plan <= vm.height
-  const left = vm.height - fixed - (plan ? ROWS.plan : 0)
+  let left = vm.height - fixed - (plan ? ROWS.plan : 0)
+  const usage = counted && left >= ROWS.usage
+  if (usage) left -= ROWS.usage
   const footer = (rows: number) => Math.max(0, Math.min(notes, rows))
-  if (entries === 0) return { plan, log: 'none', logLines: 0, footer: footer(left) }
+  if (entries === 0) return { plan, usage, log: 'none', logLines: 0, footer: footer(left) }
   if (LOG_FRAME_ROWS + fullLines <= left) {
-    return { plan, log: 'full', logLines: fullLines, footer: footer(left - LOG_FRAME_ROWS - fullLines) }
+    return { plan, usage, log: 'full', logLines: fullLines, footer: footer(left - LOG_FRAME_ROWS - fullLines) }
   }
   const n = Math.min(LOG_COMPACT_SHOWN, entries, left)
   return n >= 1
-    ? { plan, log: 'compact', logLines: n, footer: footer(left - n) }
-    : { plan, log: 'none', logLines: 0, footer: footer(left) }
+    ? { plan, usage, log: 'compact', logLines: n, footer: footer(left - n) }
+    : { plan, usage, log: 'none', logLines: 0, footer: footer(left) }
 }
 
 /**
@@ -946,7 +1008,8 @@ export function paneFit(vm: ViewModel): PaneFit {
  * the flow (`flow`, the surface module's element, or the still stack when
  * null), the selected worker's detail strip, the session log as `paneFit`
  * decides (the full log, the compact log of exactly its `logLines` newest
- * entries, or none), the status line and the first `footer` notes that
+ * entries, or none), the status line, the tokens line when `paneFit` has
+ * a row for it, and the first `footer` notes that
  * `paneFit` leaves room for (none: no notes box).
  */
 export function drawPane(el: El, vm: ViewModel, flow: RenderElement | null): RenderElement {
@@ -954,6 +1017,7 @@ export function drawPane(el: El, vm: ViewModel, flow: RenderElement | null): Ren
   const box = selectedBox(vm)
   const fit = paneFit(vm)
   const footer = footerLines(vm).slice(0, fit.footer)
+  const usageText = fit.usage ? usageLineText(vm) : null
 
   return (
     <Box key="pane" flexDirection="column" width={vm.width}>
@@ -966,6 +1030,7 @@ export function drawPane(el: El, vm: ViewModel, flow: RenderElement | null): Ren
       {fit.log === 'full' && drawLog(el, vm)}
       {fit.log === 'compact' && drawCompactLog(el, vm, fit.logLines)}
       {drawStatus(el, vm)}
+      {fit.usage && usageText !== null && drawUsage(el, vm, usageText)}
       {footer.length > 0 && (
         <Box key="footer" flexDirection="column" width={vm.width}>
           {footer.map(line => (

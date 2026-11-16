@@ -21,9 +21,10 @@ const DEFAULT_TYPE = 'general-purpose'
 // board-5: workstreams. Board gained taskId, repo, parked, closed, activeAt;
 // AgentBox gained taskId and routed; a reject records its taskId; Unit gained context.
 // board-6: Routed gained ranOn.
+// board-7: AgentBox gained peakIn; Board gained leadByTask and boardSent.
 // register.tsx declares its own atoms over the same refs with these tags
 // (`claude plugin validate` reads only an atom made in the file that uses it).
-export const BOARD_SHAPE = 'board-6'
+export const BOARD_SHAPE = 'board-7'
 export const LIVE_SHAPE = 'live-2'
 
 export const boardAtom = atom({ plugin: 'flowestra', key: 'board' } as const, emptyBoard(0), {
@@ -56,6 +57,8 @@ export function emptyBoard(now: number): Board {
     parked: [],
     closed: [],
     activeAt: now,
+    leadByTask: {},
+    boardSent: {},
   }
 }
 
@@ -147,6 +150,7 @@ function newBox(id: string, now: number, over: Partial<AgentBox>): AgentBox {
     lastTool: null,
     briefChars: null,
     resultChars: null,
+    peakIn: null,
     flow: { dir: null, at: null },
     taskId: null,
     routed: null,
@@ -408,7 +412,7 @@ export function applySpawn(board: Board, info: SpawnInfo, now: number): Board {
     startedAt: now,
     endedAt: null,
     lastEventAt: now,
-    briefChars: info.promptChars ?? null,
+    briefChars: kept ? (kept.briefChars ?? 0) + (info.promptChars ?? 0) : (info.promptChars ?? null),
     flow: { dir: 'out', at: now },
     tokensPartial: info.resumed ? (prev?.tokensPartial ?? false) : false,
   }
@@ -436,6 +440,8 @@ export type StepUsage = Pick<
 export function applyStep(board: Board, agentId: string | undefined, usage: StepUsage | null, now: number): Board {
   const box = boxFor(board, agentId, now)
   let tokens = box.tokens
+  let peakIn = box.peakIn ?? null
+  let leadByTask = board.leadByTask ?? {}
   if (usage) {
     const t: Tokens = tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 0 }
     tokens = {
@@ -445,10 +451,26 @@ export function applyStep(board: Board, agentId: string | undefined, usage: Step
       output: t.output + (usage.output_tokens ?? 0),
       requests: t.requests + 1,
     }
+    peakIn = Math.max(peakIn ?? 0, (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0))
+    if (agentId === undefined) {
+      const key = board.taskId ?? ''
+      const l: Tokens = leadByTask[key] ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 0 }
+      leadByTask = {
+        ...leadByTask,
+        [key]: {
+          input: l.input + (usage.input_tokens ?? 0),
+          cacheWrite: l.cacheWrite + (usage.cache_creation_input_tokens ?? 0),
+          cacheRead: l.cacheRead + (usage.cache_read_input_tokens ?? 0),
+          output: l.output + (usage.output_tokens ?? 0),
+          requests: l.requests + 1,
+        },
+      }
+    }
   }
-  return put(board, {
+  return put({ ...board, leadByTask }, {
     ...box,
     tokens,
+    peakIn,
     model: usage?.model ?? box.model,
     status: activeStatus(box, agentId),
     lastEventAt: now,
@@ -502,7 +524,7 @@ export function applyComplete(board: Board, agentId: string | undefined, info: C
         ...base,
         status: 'done',
         reason: null,
-        resultChars: info.answerChars ?? null,
+        resultChars: box.endedAt === null ? (info.answerChars == null ? box.resultChars : (box.resultChars ?? 0) + info.answerChars) : box.resultChars,
         flow: { dir: 'in', at: now },
       })
     case 'error':
@@ -513,6 +535,13 @@ export function applyComplete(board: Board, agentId: string | undefined, info: C
     default:
       return board
   }
+}
+
+/** An AgentBoard call was applied: count it, and the characters it carried, under the task `key` ('' = no task). */
+export function applyBoardSent(board: Board, key: string, chars: number): Board {
+  const boardSent = board.boardSent ?? {}
+  const prev = boardSent[key] ?? { calls: 0, chars: 0 }
+  return { ...board, boardSent: { ...boardSent, [key]: { calls: prev.calls + 1, chars: prev.chars + Math.max(0, chars) } } }
 }
 
 export type ListEntry = {

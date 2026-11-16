@@ -28,6 +28,7 @@ const mk = (id: string, over: Partial<AgentBox> = {}): AgentBox => ({
   flow: { dir: null, at: null },
   taskId: null,
   routed: null,
+  peakIn: null,
   ...over,
 })
 
