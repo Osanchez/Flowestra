@@ -14,9 +14,9 @@ Flowestra is a Claude Code mod. It gives the main session a routing policy for c
 
 Flowestra is for work where you want control over which model does what, and a record of it; it is not a way to make quick fixes cheaper.
 
-- **Multi-step changes in one repository.** The orchestrator writes the spec, a Sonnet worker implements and tests, and the orchestrator reviews. In the [benchmark](docs/BENCHMARK.md) this used 17% fewer tokens in total and 35–61% fewer Opus tokens than a plain session.
+- **Multi-step changes in one repository.** The orchestrator writes the spec, a Sonnet worker implements and tests, and the orchestrator reviews. In the [benchmark](docs/BENCHMARK.md) this used 29–60% fewer Opus tokens than a plain session. Total tokens were 22% lower on the larger task and about even on the small one.
 - **Long sessions and multi-part projects.** Workers do the reading and the edit/test loop in contexts that end, so the lead's context stays small instead of growing every turn.
-- **Work across several repositories, for structure rather than savings.** The work splits into parallel units, one per repository, and shared contracts and migrations get an Opus-level design and review by rule, while Sonnet writes each repository's part. In the benchmark's three-repository task this cost 46% more input than a plain session, at the same pass rate.
+- **Work across several repositories.** The work splits into parallel units, one per repository, and shared contracts and migrations get an Opus-level design and review by rule, while Sonnet writes each repository's part. In the benchmark's three-repository task, total tokens were about even with a plain session, Opus tokens 17% lower and wall-clock 29% shorter, at the same pass rate.
 - **Changes where a mistake does real damage (migrations, security, auth, data deletion).** Their design and review are routed to Opus by rule (Sonnet writes the approved spec), and in the `full` workflow nothing is built before you approve a written design.
 - **Teams or audits that need to know what was done and why.** Every brief, result and verdict is in the journal, and approved designs are in `.flowestra/decisions.md`.
 - **Bulk mechanical work (searching, inventories, extraction, fix-until-green loops).** It goes to Haiku or Sonnet, in parallel where the units are independent.
@@ -31,10 +31,10 @@ Flowestra is for work where you want control over which model does what, and a r
 
 ## Limitations
 
-- **Fixed prompt overhead.** About 8.9k tokens of instructions are added to every request of the lead, mostly read from cache.
+- **Fixed prompt overhead.** About 9k tokens of instructions are added to every request of the lead, mostly read from cache.
 - **Workers start cold.** Each rereads the files it needs, and work that fails at Sonnet is rerun on Opus, which adds tokens; a writing unit is instead retried once on Sonnet with a tightened spec, then you are asked.
-- **Slower on some work.** On the benchmark's larger task, total output rose 18% and wall-clock time 12% against a plain session.
-- **Dearer on cross-repository changes.** On the benchmark's three-repository contract change, total input rose 46% and Opus input 36%: in every run the policy sent one unit to an Opus worker (shared contract or migration), and the lead's own input fell only 15%. 0.17.0 keeps that writing on Sonnet; not yet re-measured.
+- **More output, and slower on single-repository work.** In the benchmark, total output rose 9–36% on every task, and wall-clock time rose 15–16% on the single-repository tasks, against a plain session.
+- **Savings depend on the task's length.** Total tokens fell only where a plain session would loop for a long time (−22% on the larger task). On the short ones a worker's cold start about cancels the saving.
 - **Small evidence base.** The benchmark is 3 runs per cell, with tasks of about 2–10 minutes: two in one repository and one across three small repositories. Hours-long work has not been measured yet.
 - **No counterfactual in the Tokens tab.** It shows what was spent, not what the same work would have used without the mod.
 - **The gate only sees agent starts.** Workflow agents, skills that run in their own agent, and agents started before the board loaded run unchecked; they are marked, not refused. See "What the gate does not check".
@@ -44,16 +44,16 @@ Flowestra is for work where you want control over which model does what, and a r
 
 ## Token cost, measured
 
-Measured on 18 fresh sessions (Flowestra 0.16.0, Opus 5.5 lead, 3 runs per cell, median):
+Measured on 18 fresh sessions (Flowestra 0.17.0, Opus 5.5 lead, 3 runs per cell, median):
 
-| Task | Without Flowestra | With 0.16.0 | Difference (total) | Opus tokens |
+| Task | Without Flowestra | With 0.17.0 | Difference (total) | Opus tokens |
 |---|---:|---:|---:|---:|
-| Small: one fix | 1.00M tokens | 0.83M tokens | −17% | −35% |
-| Larger: three fixes | 3.47M tokens | 2.88M tokens | −17% | −61% |
-| Three repositories, one shared contract | 1.81M tokens | 2.65M tokens | +46% | +36% |
-| Fixed cost per request | | | +8.9k tokens, mostly cached | |
+| Small: one fix | 1.00M tokens | 1.09M tokens | +9% (within spread) | −29% |
+| Larger: three fixes | 3.47M tokens | 2.72M tokens | −22% | −60% |
+| Three repositories, one shared contract | 1.81M tokens | 2.00M tokens | +10% (within spread) | −17% |
+| Fixed cost per request | | | +9k tokens, mostly cached | |
 
-Delegation happens on its own: in all 9 runs the work went to workers, and the lead made no file edits. On the single-repository tasks the work went mostly to Sonnet, so the Opus share fell. On the three-repository task, every run also sent one unit to an Opus worker (shared contract or migration), and the total rose. The tests passed in every run, including a hidden 40-test acceptance suite on the multi-repo task. The sample is small (3 runs per cell), and on the small and multi-repo tasks the total-input ranges overlap.
+Delegation happens on its own: in all 9 runs Sonnet workers wrote every change, no Opus worker ran, and the lead edited no project file. The Opus share fell on every task. Total tokens fell on the larger task and were about even on the other two. Output was higher on every task, by 9–36%. The three-repository task finished 29% faster, because its units ran in parallel. The tests passed in every run, including a hidden 40-test acceptance suite on the multi-repo task. The sample is small (3 runs per cell).
 
 **[Full benchmark: method, every run, benefits, limitations and when it's worth it →](docs/BENCHMARK.md)**
 
