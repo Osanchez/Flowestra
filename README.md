@@ -10,13 +10,36 @@ Flowestra is a Claude Code mod. It gives the main session a routing policy for c
 
 *A staged demo run: the workers here only pause for a few seconds, so the recording shows the board and not real work.*
 
-## What it is good for
+## When to use it
 
-- **Spending the expensive model where it matters.** Planning, design and anything risky goes to Opus. Specified work with a test to check it goes to Sonnet. Read-only lookups go to Haiku. The routing rules are written down, and every delegation records why it went where it did.
-- **Keeping the main session's context for decisions.** Workers read the code and do the work in their own context. The orchestrator frames the problem, reviews what comes back and decides.
-- **Working on several projects in one session.** Each piece of work is a task with its own repository, phase and units. Switching tasks takes one call, and the board hands back that task's state, so the session does not have to hold every project's history.
-- **Being able to answer "what was done, and why".** Every delegation's brief, result and verdict is written to a journal, indexed by repository, task and phase.
-- **Seeing what your agents are doing.** A pane beside the chat shows each worker's model, current tool, elapsed time and real token counts, with results flowing back to the lead.
+Flowestra is for work where you want control over which model does what, and a record of it; it is not a way to make quick fixes cheaper.
+
+- **Multi-step changes in one repository.** The orchestrator writes the spec, a Sonnet worker implements and tests, and the orchestrator reviews. In the [benchmark](docs/BENCHMARK.md) this used 17% fewer tokens in total and 35–61% fewer Opus tokens than a plain session.
+- **Long sessions and multi-part projects.** Workers do the reading and the edit/test loop in contexts that end, so the lead's context stays small instead of growing every turn.
+- **Work across several repositories.** Each repository gets its own task with its own phase and units. Switching takes one call and returns that task's state.
+- **Changes where a mistake does real damage (migrations, security, auth, data deletion).** These are routed to Opus by rule, and in the `full` workflow nothing is built before you approve a written design.
+- **Teams or audits that need to know what was done and why.** Every brief, result and verdict is in the journal, and approved designs are in `.flowestra/decisions.md`.
+- **Bulk mechanical work (searching, inventories, extraction, fix-until-green loops).** It goes to Haiku or Sonnet, in parallel where the units are independent.
+- **Seeing how agents spend tokens.** The board shows each worker's model, current tool and real token counts; the Tokens tab splits the lead from the workers.
+- **Keeping the top model for decisions.** The lead frames, routes and reviews; workers write.
+
+**When not to use it**
+
+- **A quick one-line or one-file fix.** The overhead and a worker's cold start buy you little; plain Claude Code is simpler.
+- **Fully unattended runs with `full`.** It stops for your approval. Use `light`, or state the approval up front.
+- **Work that needs the built-in agent types (Explore, Plan, general-purpose and the rest).** They are unavailable while the mod is loaded.
+
+## Limitations
+
+- **Fixed prompt overhead.** About 8.9k tokens of instructions are added to every request of the lead, mostly read from cache.
+- **Workers start cold.** Each rereads the files it needs, and a unit that fails at Sonnet is rerun on Opus (escalation), which adds tokens.
+- **Slower on some work.** On the benchmark's larger task, total output rose 18% and wall-clock time 12% against a plain session.
+- **Small evidence base.** The benchmark is 3 runs per cell, on one repository, with tasks of about 2–9 minutes. Hours-long and multi-repository work has not been measured yet.
+- **No counterfactual in the Tokens tab.** It shows what was spent, not what the same work would have used without the mod.
+- **The gate only sees agent starts.** Workflow agents, skills that run in their own agent, and agents started before the board loaded run unchecked; they are marked, not refused. See "What the gate does not check".
+- **The journal is plain text.** Briefs and results are stored unencrypted on your machine, and secret masking is best effort.
+- **The approval gate needs you.** In `full`, implementation waits for your approval.
+- **Surfaces.** The pane has been checked in the terminal; the desktop app shows a simpler fallback view. A Claude Code build that supports mods is required (tested on 2.1.325).
 
 ## Token cost, measured
 
