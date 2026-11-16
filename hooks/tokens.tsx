@@ -174,7 +174,7 @@ function drawHead(el: El, vm: ViewModel, scope: 'task' | 'all', layout: ReturnTy
   const buttonsWidth = `1: this task`.length + 2 + `2: since ${since}`.length
   if (layout.cls === 'wide') {
     return (
-      <Box key="tokens-head" width={vm.width}>
+      <Box key="tokens-head" width={vm.width} marginTop={1}>
         <Box key="title" width={Math.max(1, vm.width - buttonsWidth - 2)}>
           <Text bold wrap="truncate-end">
             {title}
@@ -185,7 +185,7 @@ function drawHead(el: El, vm: ViewModel, scope: 'task' | 'all', layout: ReturnTy
     )
   }
   return (
-    <Box key="tokens-head" flexDirection="column" width={vm.width}>
+    <Box key="tokens-head" flexDirection="column" width={vm.width} marginTop={1}>
       <Text key="title" bold wrap="truncate-end">
         {title}
       </Text>
@@ -466,7 +466,7 @@ function drawOverhead(el: El, vm: ViewModel, s: UsageScope): RenderElement {
   return section(el, vm, 'tokens-overhead', lines)
 }
 
-/** The Tokens tab: the navbar, then the sections of the design in order, drawn in full (the pane scrolls). */
+/** The Tokens tab: the navbar, one blank row (the head's marginTop, 0.15.0), then the sections of the design in order, drawn in full (the pane scrolls). */
 export function drawTokens(el: El, vm: ViewModel): RenderElement {
   const { Box } = el
   const scope = (vm.ui as { scope?: 'task' | 'all' }).scope === 'all' ? 'all' : 'task'

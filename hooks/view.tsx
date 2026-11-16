@@ -97,13 +97,13 @@ export const ROWS = {
   nav: 1,
   header: 1,
   legend: 1,
+  spacer: 1,
   lead: 5,
   plan: 6,
   leads: 12,
   between: 1,
-  workers: 11,
-  noWorkers: 1,
-  back: 4,
+  workers: 10,
+  noWorkers: 0,
   status: 1,
   usage: 1,
 } as const
@@ -448,12 +448,6 @@ export function flowProps(vm: ViewModel): FlowProps {
     if (unchecked > 0) feed += ` · ${unchecked} unchecked`
   }
 
-  const reviewing = board.phase === 'testing' || board.phase === 'review'
-  let line = reviewing ? 'review + verify' : r > 0 ? `waiting on ${r}` : 'idle'
-  if (t.done > 0) line += ` · ${t.done} in`
-  if (t.failed > 0) line += ` · ${t.failed} failed`
-  const active = reviewing || board.phase === 'done' || (r === 0 && t.done + t.failed > 0)
-
   return {
     lead: { title: `${lead ?? 'Orchestrator'} · main session`, ...leadState(vm) },
     plan,
@@ -462,7 +456,6 @@ export function flowProps(vm: ViewModel): FlowProps {
     feed,
     delegate,
     workers,
-    back: { title: lead === null ? 'back to lead' : `back to ${lead} · lead`, line, active },
   }
 }
 
@@ -578,14 +571,6 @@ function drawStillFlow(el: El, vm: ViewModel): RenderElement {
         </Box>
       )}
       {drawStillRow(el, vm, p.workers, 'still-row')}
-      <Box key="still-back" flexDirection="column" borderStyle="round" paddingX={1} {...(p.back.active ? { borderColor: 'success' as const } : { borderDimColor: true })}>
-        {p.back.active ? (
-          <Text wrap="truncate-end" bold color="success">{p.back.title}</Text>
-        ) : (
-          <Text wrap="truncate-end" bold>{p.back.title}</Text>
-        )}
-        <Text wrap="truncate-end" dimColor>{p.back.line}</Text>
-      </Box>
     </Box>
   )
 }
@@ -732,10 +717,17 @@ function drawHeader(el: El, vm: ViewModel): RenderElement {
   return (
     <Box key="header" width={vm.width}>
       <Text wrap="truncate-end">
-        <Text bold>AGENT BOARD</Text>
-        {' · '}
-        {taskId !== null && `${taskId}${others} · `}
-        {task === null ? <Text dimColor>no task declared</Text> : task}
+        {taskId === null && task === null ? (
+          <Text dimColor>no task declared</Text>
+        ) : (
+          <Text>
+            <Text dimColor>task</Text>
+            {taskId !== null && ' '}
+            {taskId !== null && <Text bold>{taskId}</Text>}
+            {others}
+            {task !== null && ` · ${task}`}
+          </Text>
+        )}
       </Text>
     </Box>
   )
@@ -988,11 +980,11 @@ export function paneFit(vm: ViewModel): PaneFit {
   }
   const leadsShown = rowLeads(vm.board, vm.now).length > 0
   const workersShown = rowWorkers(vm.board, vm.now).length > 0
-  let fixed = (vm.placement === 'widget' ? 0 : ROWS.nav) + ROWS.header + ROWS.legend + ROWS.lead
+  let fixed = (vm.placement === 'widget' ? 0 : ROWS.nav) + ROWS.header + ROWS.legend + ROWS.spacer + ROWS.lead
   if (leadsShown) fixed += ROWS.leads
   if (leadsShown && workersShown) fixed += ROWS.between
   fixed += workersShown ? ROWS.workers : ROWS.noWorkers
-  fixed += ROWS.back + ROWS.status
+  fixed += ROWS.status
   const box = selectedBox(vm)
   if (box !== undefined) fixed += DETAIL_FRAME_ROWS + detailLines(vm, box, detailInner(vm)).length
   const plan = fixed + ROWS.plan <= vm.height
@@ -1031,6 +1023,7 @@ export function drawPane(el: El, vm: ViewModel, flow: RenderElement | null): Ren
       {vm.placement !== 'widget' && drawNav(el, vm)}
       {drawHeader(el, vm)}
       {drawLegend(el, vm)}
+      <Box key="spacer" height={ROWS.spacer} />
       <Box key="flow" flexDirection="column" width={vm.width}>
         {flow ?? drawStillFlow(el, vm)}
       </Box>

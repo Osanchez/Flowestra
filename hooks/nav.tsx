@@ -1,4 +1,4 @@
-// Agent Board: the navbar (0.13.0). Pure: no `$`, no state reads.
+// Agent Board: the navbar (0.13.0; title on its row since 0.15.0). Pure: no `$`, no state reads.
 // Two plain Buttons with hotkeys. A Button's children are strings and Text
 // only: a Box inside a Button makes the whole pane fail to draw.
 
@@ -7,6 +7,8 @@ import type { RenderElement } from 'claude-code'
 import type { El, ViewModel } from './view'
 
 export const NAV_ROWS = 1
+// Below this width the title is left out and only the tabs show.
+export const NAV_TITLE_MIN = 32
 
 type Tab = 'board' | 'tokens'
 
@@ -14,7 +16,15 @@ export function drawNav(el: El, vm: ViewModel): RenderElement {
   const { Box, Text, Button } = el
   const tab: Tab = ((vm.ui as { tab?: Tab }).tab ?? 'board') === 'tokens' ? 'tokens' : 'board'
   return (
-    <Box key="nav" width={vm.width}>
+    <Box key="nav" width={vm.width} flexDirection="row">
+      {vm.width >= NAV_TITLE_MIN && (
+        <Box key="nav-title" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text bold wrap="truncate-end">
+            AGENT BOARD
+          </Text>
+        </Box>
+      )}
+      <Box key="nav-tabs" flexShrink={0}>
       <Button key="tab-board" plain hotkey="b" dimColor={tab !== 'board'} onPress={() => vm.onTab?.('board')}>
         {tab === 'board' ? (
           <Text bold underline>
@@ -34,6 +44,7 @@ export function drawNav(el: El, vm: ViewModel): RenderElement {
           'Tokens'
         )}
       </Button>
+      </Box>
     </Box>
   )
 }

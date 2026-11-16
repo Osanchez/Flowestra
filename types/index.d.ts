@@ -167,11 +167,6 @@ export type FlowPlan = {
   total: number          // units declared; 0: none declared
   counts: string         // "running 2   failed 0   queued 1"
 }
-export type FlowBack = {
-  title: string          // "back to Fable 5.2 · lead"
-  line: string           // "review + verify · 2 in", "waiting on 3", "idle"
-  active: boolean        // results are in the lead's hands: drawn lit
-}
 export type FlowProps = {
   lead: FlowLead
   plan: FlowPlan | null  // null: the pane is too short for the plan box
@@ -180,7 +175,6 @@ export type FlowProps = {
   feed: string           // the label under the leads row's fan-in: "leads → lead audits → workers · 1 accepted · 1 unchecked"
   delegate: string       // the label over the workers row's fan-out: "delegate to workers · Sonnet 5.5, Opus 5.5"
   workers: RowCard[]     // in order of first appearance; a card left out has gone (every card row 'workers')
-  back: FlowBack
 }
 // What the flow module posts (ui.message) when a worker card is pressed.
 export type RowPost = { select: string }

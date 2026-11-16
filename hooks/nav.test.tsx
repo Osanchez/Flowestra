@@ -75,18 +75,42 @@ const kids = (n: any): any[] => ((n?.children as any[]) ?? []).filter(c => c !==
 
 const withTab = (tab: BoardTab): ViewModel['ui'] => ({ ...emptyUi(), tab })
 
-test('the navbar: one row, two plain Buttons keyed tab-board and tab-tokens with hotkeys b and t', async ($, on) => {
+test('the navbar: one row, AGENT BOARD then two plain Buttons keyed tab-board and tab-tokens with hotkeys b and t', async ($, on) => {
   expect(NAV_ROWS).toBe(1)
   const ctx: Ctx = { vm: vmOf(), whole: false }
+  hookUp(on, ctx)
+  for (const width of [72, 96]) {
+    ctx.vm = vmOf({ width })
+    for (const surface of SURFACES) {
+      const ui = await mountPane($, surface, ctx.vm)
+      const nav = await ui.find({ key: 'nav' })
+      expect(nav?.props.width).toBe(width)
+      const buttons: any[] = []
+      walk(nav, n => {
+        if (n.type === 'Button') buttons.push(n)
+      })
+      expect(buttons.map(keyOf)).toEqual(['tab-board', 'tab-tokens'])
+      expect(buttons.map(b => b.props.hotkey)).toEqual(['b', 't'])
+      expect(buttons.every(b => b.props.plain === true)).toBe(true)
+      expect((await ui.find({ key: 'nav-title' }))?.text).toBe('AGENT BOARD')
+      await ui.unmount()
+    }
+  }
+})
+
+test('below 32 columns the title is left out and only the tab Buttons show', async ($, on) => {
+  const ctx: Ctx = { vm: vmOf({ width: 30 }), whole: false }
   hookUp(on, ctx)
   for (const surface of SURFACES) {
     const ui = await mountPane($, surface, ctx.vm)
     const nav = await ui.find({ key: 'nav' })
-    expect(nav?.props.width).toBe(72)
-    const buttons = kids(nav).filter(c => c.type === 'Button')
+    const buttons: any[] = []
+    walk(nav, n => {
+      if (n.type === 'Button') buttons.push(n)
+    })
     expect(buttons.map(keyOf)).toEqual(['tab-board', 'tab-tokens'])
-    expect(buttons.map(b => b.props.hotkey)).toEqual(['b', 't'])
-    expect(buttons.every(b => b.props.plain === true)).toBe(true)
+    expect(nav?.text).not.toContain('AGENT BOARD')
+    expect(await ui.find({ key: 'nav-title' })).toBeFalsy()
     await ui.unmount()
   }
 })
@@ -168,8 +192,8 @@ test('the pane draws the navbar first, except in the widget seat, which draws no
       ctx.vm = vmOf(placement === undefined ? {} : { placement })
       const ui = await mountPane($, surface, ctx.vm)
       const keys = kids(await ui.find({ key: 'pane' })).map(keyOf)
-      if (placement === 'widget') expect(keys).toEqual(['header', 'legend', 'flow', 'status'])
-      else expect(keys.slice(0, 2)).toEqual(['nav', 'header'])
+      if (placement === 'widget') expect(keys).toEqual(['header', 'legend', 'spacer', 'flow', 'status'])
+      else expect(keys.slice(0, 4)).toEqual(['nav', 'header', 'legend', 'spacer'])
       await ui.unmount()
     }
   }

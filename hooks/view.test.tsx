@@ -154,7 +154,12 @@ const BORDERS: Record<string, [string, string, string, string, string, string]> 
 
 function textOf(n: unknown): string {
   if (typeof n === 'string') return n
-  if (n && typeof n === 'object') return ((n as { children?: unknown[] }).children ?? []).map(textOf).join('')
+  if (n && typeof n === 'object') {
+    const node = n as { type?: string; props?: { label?: unknown }; children?: unknown[] }
+    const text = (node.children ?? []).map(textOf).join('')
+    // a Button with a plain string child reaches the tree as its label, with no child
+    return text === '' && node.type === 'Button' && typeof node.props?.label === 'string' ? node.props.label : text
+  }
   return ''
 }
 
@@ -170,7 +175,7 @@ function paint(n: unknown, width: number): string[] {
   const p = node.props ?? {}
   const kids = (node.children ?? []).filter(k => k !== null && k !== false && k !== undefined)
   if (node.type === 'Text') return [pad(textOf(node), width)]
-  if (node.type === 'Button') return [pad(textOf(node), width)]
+  if (node.type === 'Button') return [pad(textOf(node) || String(p.label ?? ''), width)]
   const w = typeof p.width === 'number' ? Math.min(p.width, width) : width
   const border = typeof p.borderStyle === 'string' ? BORDERS[p.borderStyle] ?? BORDERS.single : null
   const px = typeof p.paddingX === 'number' ? p.paddingX : 0
@@ -182,11 +187,18 @@ function paint(n: unknown, width: number): string[] {
     const cols = kids.map(k => {
       const kn = k as { type?: string; props?: { width?: unknown } }
       // a Text, or a Box with no width of its own, takes the width of its text
-      const kw = typeof kn.props?.width === 'number' && kn.type !== 'Text' ? (kn.props.width as number) : [...textOf(k)].length
+      const kw = typeof kn.props?.width === 'number' && kn.type !== 'Text' ? (kn.props.width as number) : [...(textOf(k) || String((k as { props?: { label?: unknown } }).props?.label ?? ''))].length
       const cw = Math.max(0, Math.min(kw, inner - used))
       used += cw
       return { cw, lines: cw > 0 ? paint(k, cw) : [] }
     })
+    // a flexGrow child takes the width the others leave
+    const grow = kids.findIndex(k => ((k as { props?: { flexGrow?: unknown } }).props?.flexGrow ?? 0) !== 0)
+    if (grow >= 0 && used < inner) {
+      const c = cols[grow]!
+      c.cw += inner - used
+      c.lines = paint(kids[grow], c.cw)
+    }
     const h = Math.max(0, ...cols.map(c => c.lines.length))
     for (let i = 0; i < h; i++) lines.push(pad(cols.map(c => c.lines[i] ?? ' '.repeat(c.cw)).join(''), inner))
   } else {
@@ -197,6 +209,9 @@ function paint(n: unknown, width: number): string[] {
     })
   }
   lines = lines.map(l => ' '.repeat(px) + l + ' '.repeat(px))
+  // a blank row for a Box with a height of its own (the spacer) and for marginTop
+  if (typeof p.height === 'number') while (lines.length < p.height) lines.push(' '.repeat(inner + px * 2))
+  if (typeof p.marginTop === 'number') lines = [...Array.from({ length: p.marginTop }, () => ' '.repeat(inner + px * 2)), ...lines]
   if (border) {
     const [tl, tr, bl, br, hz, vt] = border
     lines = [tl + hz.repeat(w - 2) + tr, ...lines.map(l => vt + l + vt), bl + hz.repeat(w - 2) + br]
@@ -499,8 +514,8 @@ describe('flowProps: the lead box', () => {
 describe('flowProps: the plan box', () => {
   test('null on a pane one row short of the fixed rows plus the plan box; there when they fit and when the height is unknown', () => {
     const b = board({}, [agent('main')])
-    // no card: navbar, header, legend, lead box, the stem, return box, status line
-    const fixed = ROWS.nav + ROWS.header + ROWS.legend + ROWS.lead + ROWS.noWorkers + ROWS.back + ROWS.status
+    // no card: navbar, header, legend, spacer, lead box, the stem, status line
+    const fixed = ROWS.nav + ROWS.header + ROWS.legend + ROWS.spacer + ROWS.lead + ROWS.noWorkers + ROWS.status
     expect(flowProps(vmOf(b, { height: fixed + ROWS.plan - 1 })).plan).toBeNull()
     expect(flowProps(vmOf(b, { height: fixed + ROWS.plan })).plan).not.toBeNull()
     expect(flowProps(vmOf(b, { height: null })).plan).not.toBeNull()
@@ -561,38 +576,13 @@ describe('flowProps: the delegate label', () => {
   })
 })
 
-describe('flowProps: the return box', () => {
-  const back = (over: Partial<Board>, agents: AgentBox[]) => flowProps(vmOf(board(over, agents))).back
-
-  test('title: back to the lead model, or back to lead when unknown', () => {
-    expect(back({}, [agent('main', { model: 'claude-fable-5-2' })]).title).toBe('back to Fable 5.2 · lead')
-    expect(back({}, [agent('main', { model: null })]).title).toBe('back to lead')
-    expect(back({}, []).title).toBe('back to lead')
-  })
-
-  test('waiting on the running workers; idle when none ran', () => {
-    expect(back({ phase: 'executing' }, [agent('main'), agent('w1'), agent('w2', { status: 'starting' }), agent('w3', { status: 'waiting' })])).toMatchObject({
-      line: 'waiting on 2',
-      active: false,
-    })
-    expect(back({ phase: 'executing' }, [agent('main')])).toMatchObject({ line: 'idle', active: false })
-    expect(back({ phase: null }, [])).toMatchObject({ line: 'idle', active: false })
-  })
-
-  test('results in and failures counted after the base', () => {
-    const ended = [agent('d1', { status: 'done', endedAt: NOW - 60_000 }), agent('d2', { status: 'done', endedAt: NOW - 60_000 }), agent('f1', { status: 'stopped', endedAt: NOW - 60_000 })]
-    expect(back({ phase: 'executing' }, [agent('main'), agent('w1'), ...ended])).toMatchObject({ line: 'waiting on 1 · 2 in · 1 failed', active: false })
-    // nothing running and something ended: active
-    expect(back({ phase: 'executing' }, [agent('main'), ...ended])).toMatchObject({ line: 'idle · 2 in · 1 failed', active: true })
-    expect(back({ phase: 'executing' }, [agent('main'), ended[2]!])).toMatchObject({ line: 'idle · 1 failed', active: true })
-  })
-
-  test('testing and review: review + verify, active; done: active', () => {
-    const done = agent('d1', { status: 'done', endedAt: NOW - 60_000 })
-    expect(back({ phase: 'testing' }, [agent('main'), agent('w1'), done])).toEqual({ title: 'back to Opus 5.5 · lead', line: 'review + verify · 1 in', active: true })
-    expect(back({ phase: 'review' }, [agent('main')])).toMatchObject({ line: 'review + verify', active: true })
-    expect(back({ phase: 'done' }, [agent('main')])).toMatchObject({ line: 'idle', active: true })
-    expect(back({ phase: 'done' }, [agent('main'), agent('w1')])).toMatchObject({ line: 'waiting on 1', active: true })
+describe('flowProps: no return box (0.15.0)', () => {
+  test('the props carry no back field and no text says "back to"', () => {
+    for (const agents of [[agent('main', { model: 'claude-fable-5-2' })], [agent('main'), agent('w1')], []]) {
+      const p = flowProps(vmOf(board({ phase: 'testing' }, agents)))
+      expect('back' in p).toBe(false)
+      expect(JSON.stringify(p)).not.toContain('back to')
+    }
   })
 })
 
@@ -784,10 +774,9 @@ describe('flowProps: the leads and feed labels', () => {
     expect(flowProps(vmOf(threeTiers())).delegate).toBe('delegate to workers · Sonnet 5.5, Opus 5.5')
   })
 
-  test('the lead, return box and plan counts still count the leads row', () => {
+  test('the lead and plan counts still count the leads row', () => {
     const p = flowProps(vmOf(leadsBoard()))
     expect(p.plan?.counts).toBe('running 2  failed 0  queued 0')
-    expect(p.back.line).toBe('waiting on 2')
   })
 })
 
@@ -795,14 +784,14 @@ describe('flowProps: the plan box with the leads row', () => {
   test('counts the leads row and the stem between the rows while a leads card is shown', () => {
     expect(ROWS.leads).toBe(12)
     const withLeads = leadsBoard()
-    // both rows: 1+1+1+5+12+1+11+4+1 = 37, so the plan box needs 43
-    expect(flowProps(vmOf(withLeads, { height: 42 })).plan).toBeNull()
-    expect(flowProps(vmOf(withLeads, { height: 43 })).plan).not.toBeNull()
+    // both rows: 1+1+1+1+5+12+1+10+1 = 33, so the plan box needs 39
+    expect(flowProps(vmOf(withLeads, { height: 38 })).plan).toBeNull()
+    expect(flowProps(vmOf(withLeads, { height: 39 })).plan).not.toBeNull()
     expect(flowProps(vmOf(withLeads, { height: null })).plan).not.toBeNull()
     const without = board({}, [agent('main'), agent('w1')])
-    // workers only: 1+1+1+5+11+4+1 = 24, so the plan box needs 30
-    expect(flowProps(vmOf(without, { height: 30 })).plan).not.toBeNull()
-    expect(flowProps(vmOf(without, { height: 29 })).plan).toBeNull()
+    // workers only: 1+1+1+1+5+10+1 = 20, so the plan box needs 26
+    expect(flowProps(vmOf(without, { height: 26 })).plan).not.toBeNull()
+    expect(flowProps(vmOf(without, { height: 25 })).plan).toBeNull()
   })
 
   test('flowProps and paneFit agree on the plan box at every height', () => {
@@ -1087,19 +1076,19 @@ const noCards = () => board({}, [agent('main')])
 
 /** The worked examples (no card selected, no footer lines, the five-entry log). */
 const FIT_EXAMPLES: Array<{ name: string; board: () => Board; height: number | null; fit: ReturnType<typeof paneFit> }> = [
-  { name: 'both rows, 43', board: bothRows, height: 43, fit: { plan: true, usage: false, log: 'none', logLines: 0, footer: 0 } },
-  { name: 'both rows, 45', board: bothRows, height: 45, fit: { plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 } },
-  { name: 'both rows, 42', board: bothRows, height: 42, fit: { plan: false, usage: true, log: 'compact', logLines: 2, footer: 0 } },
-  { name: 'both rows, 51', board: bothRows, height: 51, fit: { plan: true, usage: true, log: 'full', logLines: 4, footer: 0 } },
-  { name: 'leads only, 43', board: leadsOnly, height: 43, fit: { plan: true, usage: true, log: 'full', logLines: 4, footer: 0 } },
-  { name: 'workers only, 32', board: workersOnly, height: 32, fit: { plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 } },
-  { name: 'no cards, 22', board: noCards, height: 22, fit: { plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 } },
+  { name: 'both rows, 39', board: bothRows, height: 39, fit: { plan: true, usage: false, log: 'none', logLines: 0, footer: 0 } },
+  { name: 'both rows, 41', board: bothRows, height: 41, fit: { plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 } },
+  { name: 'both rows, 38', board: bothRows, height: 38, fit: { plan: false, usage: true, log: 'compact', logLines: 2, footer: 0 } },
+  { name: 'both rows, 47', board: bothRows, height: 47, fit: { plan: true, usage: true, log: 'full', logLines: 4, footer: 0 } },
+  { name: 'leads only, 39', board: leadsOnly, height: 39, fit: { plan: true, usage: true, log: 'full', logLines: 4, footer: 0 } },
+  { name: 'workers only, 28', board: workersOnly, height: 28, fit: { plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 } },
+  { name: 'no cards, 18', board: noCards, height: 18, fit: { plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 } },
   { name: 'height unknown', board: bothRows, height: null, fit: { plan: true, usage: true, log: 'full', logLines: 4, footer: 0 } },
 ]
 
 describe('paneFit: exact row accounting', () => {
   test('the row constants', () => {
-    expect(ROWS).toEqual({ nav: 1, header: 1, legend: 1, lead: 5, plan: 6, leads: 12, between: 1, workers: 11, noWorkers: 1, back: 4, status: 1, usage: 1 })
+    expect(ROWS).toEqual({ nav: 1, header: 1, legend: 1, spacer: 1, lead: 5, plan: 6, leads: 12, between: 1, workers: 10, noWorkers: 0, status: 1, usage: 1 })
     expect(LOG_FRAME_ROWS).toBe(3)
     expect(DETAIL_FRAME_ROWS).toBe(3)
     expect(LOG_SHOWN).toBe(4)
@@ -1112,26 +1101,26 @@ describe('paneFit: exact row accounting', () => {
     }
   })
 
-  test('the fixed rows per row shown: both rows 37, leads only 26, workers only 24, no cards 14', () => {
+  test('the fixed rows per row shown: both rows 33, leads only 22, workers only 20, no cards 10', () => {
     // two rows over the fixed rows is the least height with a log: the tokens line, then the compact log of one entry, no plan box
     const fixed = (b: Board) => heightFor(vmOf(b, { log: SOME_LOG }), 'compact') - 2
-    expect(fixed(bothRows())).toBe(ROWS.nav + ROWS.header + ROWS.legend + ROWS.lead + ROWS.leads + ROWS.between + ROWS.workers + ROWS.back + ROWS.status)
-    expect(fixed(bothRows())).toBe(37)
-    expect(fixed(leadsOnly())).toBe(26)
-    expect(fixed(workersOnly())).toBe(24)
-    expect(fixed(noCards())).toBe(14)
+    expect(fixed(bothRows())).toBe(ROWS.nav + ROWS.header + ROWS.legend + ROWS.spacer + ROWS.lead + ROWS.leads + ROWS.between + ROWS.workers + ROWS.status)
+    expect(fixed(bothRows())).toBe(33)
+    expect(fixed(leadsOnly())).toBe(22)
+    expect(fixed(workersOnly())).toBe(20)
+    expect(fixed(noCards())).toBe(10)
   })
 
   test('the selected card\'s detail strip rows are counted, and can push the plan box out', () => {
     const b = workersOnly()
-    const plain = vmOf(b, { height: 30, log: SOME_LOG })
+    const plain = vmOf(b, { height: 26, log: SOME_LOG })
     expect(paneFit(plain)).toEqual({ plan: true, usage: false, log: 'none', logLines: 0, footer: 0 })
     const selected = { ...plain, ui: { ...emptyUi(), selected: 'w1' } }
     const strip = DETAIL_FRAME_ROWS + detailLines(selected, b.agents.w1!, selected.width - 4).length
     expect(paneFit(selected).plan).toBe(false)
-    expect(paneFit({ ...selected, height: 30 + strip - 1 }).plan).toBe(false)
-    expect(paneFit({ ...selected, height: 30 + strip })).toEqual({ plan: true, usage: false, log: 'none', logLines: 0, footer: 0 })
-    expect(paneFit({ ...selected, height: 30 + strip + 8 })).toEqual({ plan: true, usage: true, log: 'full', logLines: 4, footer: 0 })
+    expect(paneFit({ ...selected, height: 26 + strip - 1 }).plan).toBe(false)
+    expect(paneFit({ ...selected, height: 26 + strip })).toEqual({ plan: true, usage: false, log: 'none', logLines: 0, footer: 0 })
+    expect(paneFit({ ...selected, height: 26 + strip + 8 })).toEqual({ plan: true, usage: true, log: 'full', logLines: 4, footer: 0 })
     // the lead is never a detail strip, nor a selected id with no box
     expect(paneFit({ ...plain, ui: { ...emptyUi(), selected: 'main' } })).toEqual(paneFit(plain))
     expect(paneFit({ ...plain, ui: { ...emptyUi(), selected: 'gone' } })).toEqual(paneFit(plain))
@@ -1139,19 +1128,19 @@ describe('paneFit: exact row accounting', () => {
 
   test('footer lines come last: only the rows left after the plan box and the log', () => {
     const b = board({ note: 'live counts unavailable in this build' }, [agent('main'), agent('w1', { tokens: null })])
-    const vm = vmOf(b, { height: 29, log: SOME_LOG })
-    // two footer lines (the note and the n/a counts), not counted in the fixed rows: 24
+    const vm = vmOf(b, { height: 25, log: SOME_LOG })
+    // two footer lines (the note and the n/a counts), not counted in the fixed rows: 20
     expect(paneFit(vm)).toEqual({ plan: false, usage: true, log: 'compact', logLines: 2, footer: 2 })
-    expect(paneFit({ ...vm, height: 30 })).toEqual({ plan: true, usage: false, log: 'none', logLines: 0, footer: 0 })
-    expect(paneFit({ ...vm, height: 31 })).toEqual({ plan: true, usage: true, log: 'none', logLines: 0, footer: 0 })
-    expect(paneFit({ ...vm, height: 32 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 })
-    expect(paneFit({ ...vm, height: 33 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 0 })
-    expect(paneFit({ ...vm, height: 34 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 1 })
-    expect(paneFit({ ...vm, height: 35 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 2 })
-    expect(paneFit({ ...vm, height: 38 })).toEqual({ plan: true, usage: true, log: 'full', logLines: 4, footer: 0 })
-    expect(paneFit({ ...vm, height: 40 })).toEqual({ plan: true, usage: true, log: 'full', logLines: 4, footer: 2 })
+    expect(paneFit({ ...vm, height: 26 })).toEqual({ plan: true, usage: false, log: 'none', logLines: 0, footer: 0 })
+    expect(paneFit({ ...vm, height: 27 })).toEqual({ plan: true, usage: true, log: 'none', logLines: 0, footer: 0 })
+    expect(paneFit({ ...vm, height: 28 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 })
+    expect(paneFit({ ...vm, height: 29 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 0 })
+    expect(paneFit({ ...vm, height: 30 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 1 })
+    expect(paneFit({ ...vm, height: 31 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 2 })
+    expect(paneFit({ ...vm, height: 34 })).toEqual({ plan: true, usage: true, log: 'full', logLines: 4, footer: 0 })
+    expect(paneFit({ ...vm, height: 36 })).toEqual({ plan: true, usage: true, log: 'full', logLines: 4, footer: 2 })
     // no entries: the notes take the rows after the plan box and the tokens line
-    expect(paneFit({ ...vm, height: 32, log: logOf() })).toEqual({ plan: true, usage: true, log: 'none', logLines: 0, footer: 1 })
+    expect(paneFit({ ...vm, height: 28, log: logOf() })).toEqual({ plan: true, usage: true, log: 'none', logLines: 0, footer: 1 })
     // height unknown: every footer line
     expect(paneFit({ ...vm, height: null })).toEqual({ plan: true, usage: true, log: 'full', logLines: 4, footer: 2 })
     expect(paneFit({ ...vm, height: null, log: logOf() })).toEqual({ plan: true, usage: true, log: 'none', logLines: 0, footer: 2 })
@@ -1160,12 +1149,12 @@ describe('paneFit: exact row accounting', () => {
   test('one footer line never pushes out the plan box or the log (both rows)', () => {
     const vm = vmOf({ ...bothRows(), note: 'live counts unavailable in this build' }, { log: SOME_LOG })
     expect(footerCount(vm)).toBe(1)
-    expect(paneFit({ ...vm, height: 43 })).toEqual({ plan: true, usage: false, log: 'none', logLines: 0, footer: 0 })
-    expect(paneFit({ ...vm, height: 44 })).toEqual({ plan: true, usage: true, log: 'none', logLines: 0, footer: 0 })
-    expect(paneFit({ ...vm, height: 45 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 })
-    expect(paneFit({ ...vm, height: 46 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 0 })
+    expect(paneFit({ ...vm, height: 39 })).toEqual({ plan: true, usage: false, log: 'none', logLines: 0, footer: 0 })
+    expect(paneFit({ ...vm, height: 40 })).toEqual({ plan: true, usage: true, log: 'none', logLines: 0, footer: 0 })
+    expect(paneFit({ ...vm, height: 41 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 })
+    expect(paneFit({ ...vm, height: 42 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 0 })
     // the full log needs 7 rows and does not fit in the 3 left
-    expect(paneFit({ ...vm, height: 47 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 1 })
+    expect(paneFit({ ...vm, height: 43 })).toEqual({ plan: true, usage: true, log: 'compact', logLines: 2, footer: 1 })
     expect(paneFit({ ...vm, height: null })).toEqual({ plan: true, usage: true, log: 'full', logLines: 4, footer: 1 })
   })
 
@@ -1179,9 +1168,9 @@ describe('paneFit: exact row accounting', () => {
 
   test('the compact log never shows more entries than there are', () => {
     const one = logOf(entry(NOW - 1000, 'done', 'Write state', 'done · 3m 11s'))
-    // workers only, plan box in: 30, the tokens line 31; the full log of one entry needs 4
-    expect(paneFit(vmOf(workersOnly(), { height: 33, log: one }))).toEqual({ plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 })
-    expect(paneFit(vmOf(workersOnly(), { height: 35, log: one }))).toEqual({ plan: true, usage: true, log: 'full', logLines: 1, footer: 0 })
+    // workers only, plan box in: 26, the tokens line 27; the full log of one entry needs 4
+    expect(paneFit(vmOf(workersOnly(), { height: 29, log: one }))).toEqual({ plan: true, usage: true, log: 'compact', logLines: 1, footer: 0 })
+    expect(paneFit(vmOf(workersOnly(), { height: 31, log: one }))).toEqual({ plan: true, usage: true, log: 'full', logLines: 1, footer: 0 })
   })
 
   test('on a pane too short even for the fixed rows: no plan box, no log', () => {
@@ -1198,7 +1187,7 @@ function texts(n: any): Array<{ text: string; color: unknown; bold: unknown; dim
   return out
 }
 
-test('the sections, top to bottom with no gap: nav, header, legend, flow, detail, log, status, footer', async ($, on) => {
+test('the sections, top to bottom with no gap: nav, header, legend, spacer, flow, detail, log, status, footer', async ($, on) => {
   const ctx: Ctx = { vm: { ...threeAndBlocked(), ui: { ...emptyUi(), selected: 'w2' }, log: SOME_LOG } }
   hookUp(on, ctx)
   for (const surface of SURFACES) {
@@ -1207,7 +1196,7 @@ test('the sections, top to bottom with no gap: nav, header, legend, flow, detail
     const pane = await ui.find({ key: 'pane' })
     expect(pane?.props.gap).toBeUndefined()
     expect(pane?.props.flexDirection).toBe('column')
-    expect(kids(pane).map(keyOf)).toEqual(['nav', 'header', 'legend', 'flow', 'detail', 'log', 'status', 'usage', 'footer'])
+    expect(kids(pane).map(keyOf)).toEqual(['nav', 'header', 'legend', 'spacer', 'flow', 'detail', 'log', 'status', 'usage', 'footer'])
     const all = textOf(tree)
     expect(all).not.toMatch(/[○◉]/) // no phase stepper
     expect(all).not.toMatch(/✓ \d+ done {3}✗/) // no tally line
@@ -1217,31 +1206,32 @@ test('the sections, top to bottom with no gap: nav, header, legend, flow, detail
     // with nothing selected, no log and no notes: nav, header, legend, flow, status, tokens line
     ctx.vm = vmOf(board({}, [agent('main')]))
     const bare = await mountPane($, surface, ctx.vm)
-    expect(kids(await bare.find({ key: 'pane' })).map(keyOf)).toEqual(['nav', 'header', 'legend', 'flow', 'status', 'usage'])
+    expect(kids(await bare.find({ key: 'pane' })).map(keyOf)).toEqual(['nav', 'header', 'legend', 'spacer', 'flow', 'status', 'usage'])
     await bare.unmount()
     ctx.vm = { ...threeAndBlocked(), ui: { ...emptyUi(), selected: 'w2' }, log: SOME_LOG }
   }
 })
 
-test('the header: AGENT BOARD bold, then the task; dim placeholder when none; one truncated line', async ($, on) => {
+test('the header: `task` dim, the task line; dim placeholder when none; no AGENT BOARD; one truncated line', async ($, on) => {
   const ctx: Ctx = { vm: vmOf(board({}, [])) }
   hookUp(on, ctx)
   for (const surface of SURFACES) {
     ctx.vm = vmOf(board({}, []))
     let ui = await mountPane($, surface, ctx.vm)
     let header = await ui.find({ key: 'header' })
-    expect(header?.text).toBe('AGENT BOARD · Build the agent board mod')
+    expect(header?.text).toBe('task · Build the agent board mod')
     const line = kids(header)[0]
     expect(line?.type).toBe('Text')
     expect(line?.props.wrap).toBe('truncate-end')
-    expect(texts(header).find(t => t.text === 'AGENT BOARD')?.bold).toBe(true)
+    expect(header?.text).not.toContain('AGENT BOARD')
+    expect(texts(header).some(t => t.text === 'task' && t.dim === true)).toBe(true)
     await ui.unmount()
 
     ctx.vm = vmOf(board({ task: null }))
     ui = await mountPane($, surface, ctx.vm)
     header = await ui.find({ key: 'header' })
-    expect(header?.text).toBe('AGENT BOARD · no task declared')
-    expect(texts(header).find(t => t.text === 'no task declared')?.dim).toBe(true)
+    expect(header?.text).toBe('no task declared')
+    expect(texts(header).some(t => t.text === 'no task declared' && t.dim === true)).toBe(true)
     await ui.unmount()
   }
 })
@@ -1293,7 +1283,7 @@ test('the flow element is used when given', async ($, on) => {
   }
 })
 
-test('the still flow: lead box, plan box, worker cards and return box, stacked and left-aligned', async ($, on) => {
+test('the still flow: lead box, plan box, worker cards, stacked and left-aligned', async ($, on) => {
   const ctx: Ctx = { vm: threeAndBlocked() }
   hookUp(on, ctx)
   for (const surface of SURFACES) {
@@ -1301,26 +1291,27 @@ test('the still flow: lead box, plan box, worker cards and return box, stacked a
     let ui = await mountPane($, surface, ctx.vm)
     const still = await ui.find({ key: 'still-flow' })
     expect(still?.props).toMatchObject({ flexDirection: 'column', alignItems: 'flex-start' })
-    expect(kids(still).map(keyOf)).toEqual(['still-lead', 'still-plan', 'still-row', 'still-back'])
-    for (const key of ['still-lead', 'still-plan', 'still-back']) {
+    expect(kids(still).map(keyOf)).toEqual(['still-lead', 'still-plan', 'still-row'])
+    for (const key of ['still-lead', 'still-plan']) {
       expect((await ui.find({ key }))?.props).toMatchObject({ borderStyle: 'round', paddingX: 1, flexDirection: 'column' })
     }
     const p = flowProps(ctx.vm)
     expect(kids(await ui.find({ key: 'still-lead' })).map(textOf)).toEqual([p.lead.title, `${p.lead.line} · ${p.lead.tokens}`])
     expect(kids(await ui.find({ key: 'still-lead' })).map(textOf)).toEqual(['Fable 5.2 · main session', 'thinking · in 442k out 8k'])
     expect(kids(await ui.find({ key: 'still-plan' })).map(textOf)).toEqual(['PLAN · executing · wave 1', '1 of 4 units done', 'running 2  failed 0  queued 1'])
-    expect(kids(await ui.find({ key: 'still-back' })).map(textOf)).toEqual(['back to Fable 5.2 · lead', 'waiting on 2 · 1 in'])
+    expect(await ui.find({ key: 'still-back' })).toBeUndefined()
+    expect(textOf(still)).not.toContain('back to')
     expect(kids(kids(await ui.find({ key: 'still-row' }))[0]).map(keyOf)).toEqual(['slot-w1', 'slot-w2', 'slot-w3'])
     expect(await ui.find({ key: 'slot-main' })).toBeUndefined() // the lead is not a card
     expect(textOf(still)).not.toMatch(/[│┬┴├]/) // no rails
     await ui.unmount()
 
-    // the fixed rows are 1+1+1+5+11+4+1 = 24 (w3's n/a footer line is not counted): no plan box under 30
-    ctx.vm = { ...threeAndBlocked(), height: 29 }
+    // the fixed rows are 1+1+1+1+5+10+1 = 20 (w3's n/a footer line is not counted): no plan box under 26
+    ctx.vm = { ...threeAndBlocked(), height: 25 }
     ui = await mountPane($, surface, ctx.vm)
-    expect(kids(await ui.find({ key: 'still-flow' })).map(keyOf)).toEqual(['still-lead', 'still-row', 'still-back'])
+    expect(kids(await ui.find({ key: 'still-flow' })).map(keyOf)).toEqual(['still-lead', 'still-row'])
     await ui.unmount()
-    ctx.vm = { ...threeAndBlocked(), height: 30 }
+    ctx.vm = { ...threeAndBlocked(), height: 26 }
     ui = await mountPane($, surface, ctx.vm)
     expect(await ui.find({ key: 'still-plan' })).toBeDefined()
     await ui.unmount()
@@ -1331,10 +1322,6 @@ test('the still flow: lead box, plan box, worker cards and return box, stacked a
     expect((await ui.find({ key: 'still-row' }))?.text).toBe('no workers running')
     expect(kids(await ui.find({ key: 'still-lead' })).map(textOf)).toEqual(['Orchestrator · main session', 'no events yet · tokens n/a'])
     expect(kids(await ui.find({ key: 'still-plan' })).map(textOf)).toEqual(['PLAN · phase not set', 'no units declared', 'running 0  failed 0  queued 0'])
-    // something ended and nothing runs: the return box is lit
-    const back = await ui.find({ key: 'still-back' })
-    expect(kids(back).map(textOf)).toEqual(['back to lead', 'idle · 1 in'])
-    expect(back?.props.borderColor).toBe('success')
     await ui.unmount()
   }
 })
@@ -1495,16 +1482,16 @@ test('the session log: the newest four, oldest first, time, who and text, colour
 })
 
 test('the full session log when its rows fit after the plan box; the compact log when only that fits; neither when empty', async ($, on) => {
-  // no card: 14 fixed rows, the plan box 6, the tokens line 1, the full log of four entries 7: full from 28
-  const ctx: Ctx = { vm: vmOf(board({}, [agent('main')]), { log: SOME_LOG, height: 27 }) }
+  // no card: 10 fixed rows, the plan box 6, the tokens line 1, the full log of four entries 7: full from 24
+  const ctx: Ctx = { vm: vmOf(board({}, [agent('main')]), { log: SOME_LOG, height: 23 }) }
   hookUp(on, ctx)
   for (const surface of SURFACES) {
-    ctx.vm = vmOf(board({}, [agent('main')]), { log: SOME_LOG, height: 27 })
+    ctx.vm = vmOf(board({}, [agent('main')]), { log: SOME_LOG, height: 23 })
     let ui = await mountPane($, surface, ctx.vm)
     expect(await ui.find({ key: 'log' })).toBeUndefined()
     expect(await ui.find({ key: 'log-compact' })).toBeDefined()
     await ui.unmount()
-    for (const height of [28, null]) {
+    for (const height of [24, null]) {
       ctx.vm = vmOf(board({}, [agent('main')]), { log: SOME_LOG, height })
       ui = await mountPane($, surface, ctx.vm)
       expect(await ui.find({ key: 'log' })).toBeDefined()
@@ -1550,7 +1537,7 @@ test('the compact log: the newest two, oldest first, time, who and text, coloure
     expect(lines.map(l => texts(l).find(t => t.bold === true)?.color)).toEqual(['suggestion', 'claude'])
     expect(lines.every(l => texts(l).find(t => /^\d\d:\d\d:\d\d$/.test(t.text))?.dim === true)).toBe(true)
     // pane order: the compact log sits where the full log would
-    expect(kids(await ui.find({ key: 'pane' })).map(keyOf)).toEqual(['nav', 'header', 'legend', 'flow', 'log-compact', 'status', 'usage'])
+    expect(kids(await ui.find({ key: 'pane' })).map(keyOf)).toEqual(['nav', 'header', 'legend', 'spacer', 'flow', 'log-compact', 'status', 'usage'])
     await ui.unmount()
   }
 })
@@ -1602,14 +1589,14 @@ test('the drawn pane draws exactly paneFit\'s footer lines; none: no footer box'
   const ctx: Ctx = { vm: vmOf(b, { log: SOME_LOG }) }
   hookUp(on, ctx)
   for (const surface of SURFACES) {
-    for (const height of [43, 44, 45, 46, 47, null]) {
+    for (const height of [39, 40, 41, 42, 43, null]) {
       ctx.vm = vmOf(b, { log: SOME_LOG, height })
       const fit = paneFit(ctx.vm)
       const ui = await mountPane($, surface, ctx.vm)
       const footer = await ui.find({ key: 'footer' })
       if (fit.footer === 0) expect(footer).toBeUndefined()
       else expect(kids(footer).map(textOf)).toEqual(['live counts unavailable in this build'].slice(0, fit.footer))
-      expect(fit.footer).toBe(height === 47 || height === null ? 1 : 0)
+      expect(fit.footer).toBe(height === 43 || height === null ? 1 : 0)
       await ui.unmount()
     }
   }
@@ -1690,7 +1677,6 @@ test('the still flow with a leads row: its label, row and feed label between the
       'still-leads',
       'still-feed',
       'still-row',
-      'still-back',
     ])
     const label = kids(await ui.find({ key: 'still-leads-label' }))
     expect(label.map(textOf)).toEqual([p.leadsLabel])
@@ -1719,7 +1705,7 @@ test('the still flow with a leads row: its label, row and feed label between the
     // Haiku workers all gone from their row: no leads label, row or feed label
     ctx.vm = vmOf(board({}, [agent('main'), agent('h1', { model: HAIKU, status: 'done', endedAt: NOW - 600_000 })]))
     ui = await mountPane($, surface, ctx.vm)
-    expect(kids(await ui.find({ key: 'still-flow' })).map(keyOf)).toEqual(['still-lead', 'still-plan', 'still-row', 'still-back'])
+    expect(kids(await ui.find({ key: 'still-flow' })).map(keyOf)).toEqual(['still-lead', 'still-plan', 'still-row'])
     expect((await ui.find({ key: 'still-row' }))?.text).toBe('no workers running')
     await ui.unmount()
 
@@ -2076,12 +2062,9 @@ describe('counts per task', () => {
     expect(bandText(vmOf(board({ phase: null }, [])))).toBe('Agent Board  phase not set  ● 0/0 running  new n/a  cached n/a  out n/a  · /board to open')
   })
 
-  test('the plan box and the return box count the active task only', () => {
+  test('the plan box counts the active task only', () => {
     const p = flowProps(vmOf(twoTasks()))
     expect(p.plan?.counts).toBe('running 1  failed 0  queued 0')
-    expect(p.back.line).toBe('waiting on 1')
-    const idle = flowProps(vmOf(taskBoard([slot('ab-journal', 'Journal work')], [agent('j1', { taskId: 'ab-journal' })])))
-    expect(idle.back.line).toBe('idle')
   })
 })
 
@@ -2096,17 +2079,17 @@ describe('the legend over shownBoxes', () => {
   })
 })
 
-test('the header with a task open: AGENT BOARD, the id, the other tasks and those running, then the title', async ($, on) => {
+test('the header with a task open: `task <id>`, the other tasks and those running, then the title', async ($, on) => {
   const ctx: Ctx = { vm: vmOf(taskBoard([])) }
   hookUp(on, ctx)
   const open = (extra: AgentBox[]) => taskBoard([slot('ab-journal', 'Journal work'), slot('cr-fix', null)], extra)
   const cases: Array<[Board, string]> = [
-    [taskBoard([]), 'AGENT BOARD · wb-ui · Workbench UI'],
-    [taskBoard([slot('ab-journal', 'Journal work')]), 'AGENT BOARD · wb-ui +1 · Workbench UI'],
-    [open([]), 'AGENT BOARD · wb-ui +2 · Workbench UI'],
-    [open([agent('j1', { taskId: 'ab-journal' })]), 'AGENT BOARD · wb-ui +2 (1 running) · Workbench UI'],
-    [open([agent('j1', { taskId: 'ab-journal', status: 'done', endedAt: NOW - 600_000 })]), 'AGENT BOARD · wb-ui +2 · Workbench UI'],
-    [{ ...open([agent('j1', { taskId: 'ab-journal' })]), task: null }, 'AGENT BOARD · wb-ui +2 (1 running) · no task declared'],
+    [taskBoard([]), 'task wb-ui · Workbench UI'],
+    [taskBoard([slot('ab-journal', 'Journal work')]), 'task wb-ui +1 · Workbench UI'],
+    [open([]), 'task wb-ui +2 · Workbench UI'],
+    [open([agent('j1', { taskId: 'ab-journal' })]), 'task wb-ui +2 (1 running) · Workbench UI'],
+    [open([agent('j1', { taskId: 'ab-journal', status: 'done', endedAt: NOW - 600_000 })]), 'task wb-ui +2 · Workbench UI'],
+    [{ ...open([agent('j1', { taskId: 'ab-journal' })]), task: null }, 'task wb-ui +2 (1 running)'],
   ]
   for (const surface of SURFACES) {
     for (const [b, text] of cases) {
@@ -2116,8 +2099,8 @@ test('the header with a task open: AGENT BOARD, the id, the other tasks and thos
       expect(header?.text).toBe(text)
       expect(kids(header)).toHaveLength(1)
       expect(kids(header)[0]?.props.wrap).toBe('truncate-end')
-      expect(texts(header).find(t => t.text === 'AGENT BOARD')?.bold).toBe(true)
-      if (b.task === null) expect(texts(header).find(t => t.text === 'no task declared')?.dim).toBe(true)
+      expect(header?.text).not.toContain('AGENT BOARD')
+      expect(texts(header).find(t => t.text === 'wb-ui')?.bold).toBe(true)
       await ui.unmount()
     }
   }
@@ -2133,14 +2116,14 @@ test('the header: a long title is truncated within the one row; the count stays 
       const ui = await mountPane($, surface, ctx.vm)
       const header = await ui.find({ key: 'header' })
       expect(header?.props.width).toBe(width)
-      expect(header?.text.startsWith('AGENT BOARD · wb-ui +2 (1 running) · ')).toBe(true)
+      expect(header?.text.startsWith('task wb-ui +2 (1 running) · ')).toBe(true)
       expect(kids(header)).toHaveLength(1)
       expect(kids(header)[0]?.props.wrap).toBe('truncate-end')
       if (surface === 'terminal') {
         const rows = picture(await ui.drawn(), width).split('\n')
         // row 0 is the navbar; the header is one row: the legend is the next
         expect(rows[1] !== undefined && [...rows[1]].length <= width).toBe(true)
-        expect(rows[1]?.startsWith('AGENT BOARD')).toBe(true)
+        expect(rows[1]?.startsWith('task wb-ui')).toBe(true)
         expect(rows[2]?.startsWith('■')).toBe(true)
       }
       await ui.unmount()
@@ -2382,25 +2365,25 @@ describe('the tokens line', () => {
     for (const height of [null, 0, 29, 30, 31, 46, 60]) expect(paneFit(vmOf(b, { height })).usage).toBe(false)
   })
 
-  test('paneFit: the tokens line comes after the plan box and before the log (workers only, fixed 24)', () => {
+  test('paneFit: the tokens line comes after the plan box and before the log (workers only, fixed 20)', () => {
     const one = logOf(entry(NOW - 1000, 'done', 'Write state', 'done · 3m 11s'))
     const fit = (height: number, over: Partial<ViewModel> = {}) => paneFit(vmOf(usageBoard(), { height, log: one, ...over }))
-    expect(fit(29)).toMatchObject({ plan: false, usage: true, log: 'full', logLines: 1 }) // left 5 → 4 for the log
-    expect(fit(30)).toMatchObject({ plan: true, usage: false, log: 'none' })
-    expect(fit(31)).toMatchObject({ plan: true, usage: true, log: 'none' })
-    expect(fit(34)).toMatchObject({ plan: true, usage: true, log: 'compact', logLines: 1 })
-    expect(fit(35)).toMatchObject({ plan: true, usage: true, log: 'full', logLines: 1 })
-    expect(paneFit(vmOf(usageBoard(), { height: 38, log: SOME_LOG }))).toMatchObject({ plan: true, usage: true, log: 'full', logLines: 4 })
-    expect(paneFit(vmOf(usageBoard(), { height: 23, log: SOME_LOG }))).toMatchObject({ plan: false, usage: false, log: 'none' })
-    expect(paneFit(vmOf(usageBoard(), { height: 24, log: SOME_LOG }))).toMatchObject({ plan: false, usage: false, log: 'none' })
-    expect(paneFit(vmOf(usageBoard(), { height: 25, log: SOME_LOG }))).toMatchObject({ plan: false, usage: true, log: 'none' })
+    expect(fit(25)).toMatchObject({ plan: false, usage: true, log: 'full', logLines: 1 }) // left 5 → 4 for the log
+    expect(fit(26)).toMatchObject({ plan: true, usage: false, log: 'none' })
+    expect(fit(27)).toMatchObject({ plan: true, usage: true, log: 'none' })
+    expect(fit(30)).toMatchObject({ plan: true, usage: true, log: 'compact', logLines: 1 })
+    expect(fit(31)).toMatchObject({ plan: true, usage: true, log: 'full', logLines: 1 })
+    expect(paneFit(vmOf(usageBoard(), { height: 34, log: SOME_LOG }))).toMatchObject({ plan: true, usage: true, log: 'full', logLines: 4 })
+    expect(paneFit(vmOf(usageBoard(), { height: 19, log: SOME_LOG }))).toMatchObject({ plan: false, usage: false, log: 'none' })
+    expect(paneFit(vmOf(usageBoard(), { height: 20, log: SOME_LOG }))).toMatchObject({ plan: false, usage: false, log: 'none' })
+    expect(paneFit(vmOf(usageBoard(), { height: 21, log: SOME_LOG }))).toMatchObject({ plan: false, usage: true, log: 'none' })
     // with a selected card: its strip is a fixed row, so the line needs a row beyond it
-    const selected = vmOf(usageBoard(), { height: 0, log: one, ui: { ...emptyUi(), selected: 'w1' } })
+    const selected = vmOf(usageBoard(), { height: -3, log: one, ui: { ...emptyUi(), selected: 'w1' } })
     const strip = DETAIL_FRAME_ROWS + detailLines(selected, selected.board.agents.w1!, selected.width - 4).length
-    expect(paneFit({ ...selected, height: 24 + strip })).toMatchObject({ plan: false, usage: false })
-    expect(paneFit({ ...selected, height: 25 + strip })).toMatchObject({ plan: false, usage: true })
-    expect(paneFit({ ...selected, height: 30 + strip })).toMatchObject({ plan: true, usage: false })
-    expect(paneFit({ ...selected, height: 31 + strip })).toMatchObject({ plan: true, usage: true })
+    expect(paneFit({ ...selected, height: 20 + strip })).toMatchObject({ plan: false, usage: false })
+    expect(paneFit({ ...selected, height: 21 + strip })).toMatchObject({ plan: false, usage: true })
+    expect(paneFit({ ...selected, height: 26 + strip })).toMatchObject({ plan: true, usage: false })
+    expect(paneFit({ ...selected, height: 27 + strip })).toMatchObject({ plan: true, usage: true })
     // height unknown: drawn whenever there are counts
     expect(paneFit(vmOf(usageBoard(), { height: null })).usage).toBe(true)
   })
@@ -2416,10 +2399,10 @@ describe('the tokens line', () => {
 })
 
 test('the tokens line is one dim truncated Text in a Box right after the status line, drawn only when paneFit says so', async ($, on) => {
-  const ctx: Ctx = { vm: vmOf(usageBoard(), { height: 31, log: SOME_LOG }) }
+  const ctx: Ctx = { vm: vmOf(usageBoard(), { height: 27, log: SOME_LOG }) }
   hookUp(on, ctx)
   for (const surface of SURFACES) {
-    for (const [height, drawn] of [[30, false], [31, true], [null, true]] as Array<[number | null, boolean]>) {
+    for (const [height, drawn] of [[26, false], [27, true], [null, true]] as Array<[number | null, boolean]>) {
       ctx.vm = vmOf(usageBoard(), { height, log: SOME_LOG })
       expect(paneFit(ctx.vm).usage).toBe(drawn)
       const ui = await mountPane($, surface, ctx.vm)
@@ -2459,9 +2442,9 @@ describe('the navbar row in the view (0.13.0)', () => {
       for (let height = 0; height <= 100; height++) if (paneFit(vmOf(workersOnly(), { height, placement, log: SOME_LOG })).plan) return height - ROWS.plan
       throw new Error('no height')
     }
-    expect(fixed(undefined)).toBe(24)
-    expect(fixed('dock')).toBe(24)
-    expect(fixed('widget')).toBe(23)
+    expect(fixed(undefined)).toBe(20)
+    expect(fixed('dock')).toBe(20)
+    expect(fixed('widget')).toBe(19)
   })
 
   test('the pane draws the navbar first; the widget seat draws none, on both surfaces', async ($, on) => {

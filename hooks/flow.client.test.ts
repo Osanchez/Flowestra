@@ -45,7 +45,6 @@ function props(workers: RowCard[], over: Partial<FlowProps> = {}): FlowProps {
     feed: 'leads → lead audits → workers',
     delegate: 'delegate to workers · Opus 5.5',
     workers,
-    back: { title: 'back to Fable 5.2 · lead', line: 'review + verify · 1 in', active: false },
     ...over,
   }
 }
@@ -488,9 +487,8 @@ describe('drawFlow', () => {
     const centres = shownCards(s, 60, 'workers').map(e => e.centre)
     const junction = (line: string, chars: string) => [...line].map((ch, i) => (chars.includes(ch) ? i : -1)).filter(i => i >= 0)
     const out = lines.find(l => /[┌┐]/.test(l))!
-    const inn = lines.find(l => /[└┘]/.test(l) && !l.includes('╰'))!
+    expect(lines.some(l => /[└┘]/.test(l) && !l.includes('╰'))).toBe(false) // no fan-in rail under the last row (0.15.0)
     expect(junction(out, '┌┐┬┼├┤')).toEqual(centres)
-    expect(junction(inn, '└┘┴┼├┤')).toEqual(centres)
     const arrows = lines.find(l => l.includes('▼'))!
     expect(junction(arrows, '▼')).toEqual(centres)
     // the trunk junctions sit on the centre column
@@ -517,13 +515,13 @@ describe('drawFlow', () => {
     expect(lines[top + CARD_HEIGHT - 1]!.split('╰').length).toBe(4)
   })
 
-  test('no workers: one stem between the plan and the return box', () => {
+  test('no workers: the plan box ends the flow', () => {
     const lines = picture(settled([]), props([]), 60)
     show(lines)
     expect(lines.some(l => l.includes('▼'))).toBe(false)
     expect(lines.some(l => l.includes('delegate'))).toBe(false)
-    expect(lines.filter(l => l.trim() === '│').length).toBe(2) // lead-plan and plan-back
-    expect(lines.some(l => l.includes('back to Fable'))).toBe(true)
+    expect(lines.filter(l => l.trim() === '│').length).toBe(1) // lead-plan only
+    expect(lines.some(l => l.includes('back to'))).toBe(false)
   })
 
   test('nothing wider than the pane, from 1 to 200 columns, more cards than fit', () => {
@@ -659,9 +657,9 @@ describe('leads: drawFlow', () => {
 
   test('no leads: the same rows as before', () => {
     const tree = drawFlow(fakeSurface(60), settled(workers), props(workers))
-    expect(keysOf(tree)).toEqual(['lead', 'stem-plan', 'plan', 'delegate', 'rail-out', 'arrows', 'cards', 'rail-in', 'back'])
+    expect(keysOf(tree)).toEqual(['lead', 'stem-plan', 'plan', 'delegate', 'rail-out', 'arrows', 'cards'])
     const none = drawFlow(fakeSurface(60), settled([]), props([]))
-    expect(keysOf(none)).toEqual(['lead', 'stem-plan', 'plan', 'stem-back', 'back'])
+    expect(keysOf(none)).toEqual(['lead', 'stem-plan', 'plan'])
     // props with no leads fields at all
     const old = props(workers) as Partial<FlowProps>
     delete old.leads
@@ -676,7 +674,7 @@ describe('leads: drawFlow', () => {
       'lead', 'stem-plan', 'plan',
       'leads-label', 'leads-rail-out', 'leads-arrows', 'leads-cards', 'leads-rail-in', 'feed',
       'stem-workers',
-      'delegate', 'rail-out', 'arrows', 'cards', 'rail-in', 'back',
+      'delegate', 'rail-out', 'arrows', 'cards',
     ])
     const lines = picture(settled(workers, WAITING, leads), props(workers, { leads }), 60)
     show(lines)
@@ -697,12 +695,11 @@ describe('leads: drawFlow', () => {
     expect(narrow.includes('stem-workers')).toBe(false)
   })
 
-  test('leads and no workers: the leads row, then the stem back', () => {
+  test('leads and no workers: the leads row and its feed label, nothing after', () => {
     const tree = drawFlow(fakeSurface(60), settled([], WAITING, leads), props([], { leads }))
     expect(keysOf(tree)).toEqual([
       'lead', 'stem-plan', 'plan',
       'leads-label', 'leads-rail-out', 'leads-arrows', 'leads-cards', 'leads-rail-in', 'feed',
-      'stem-back', 'back',
     ])
   })
 

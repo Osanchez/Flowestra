@@ -2,7 +2,7 @@
 // tiers 0.6.0), top to bottom: the lead's box, the plan box, then (while a
 // leads card is shown) the leads row's label, fan-out rail, row of leads
 // cards, fan-in rail and feed label, then a fan-out rail, one row of worker
-// cards, a fan-in rail and the return box. A surface module: runs on the terminal's drawing thread,
+// cards (no rail or box under the last row; 0.15.0). A surface module: runs on the terminal's drawing thread,
 // animates on its own clock (`surface.every`), and posts `{ select: id }`
 // when a card is pressed.
 // Self-contained: only type imports, no value imports from sibling files.
@@ -39,7 +39,7 @@ export const FLASH_FRAMES = 3
 export const SHIMMER_WIDTH = 3
 export const SHIMMER_REST = 10
 export const CARD_HEIGHT = 7 // five text lines and the two border rows
-export const BOX_WIDTH = 34 // the lead, plan and return boxes
+export const BOX_WIDTH = 34 // the lead and plan boxes
 export const BAR_WINDOW = 3 // the running bar's sweeping window
 export const NARROW = 14 // below this many columns: the lead box and the cards only
 export const MORE_ID = 'more'
@@ -691,7 +691,7 @@ export function drawFlow(surface: Surface, state: FlowState, props: FlowProps): 
     return segRow(surface, key, [{ text: ' '.repeat(Math.floor((columns - [...label].length) / 2)) }, { text: label, dim: true }], columns)
   }
   // One row's fan-out rail, arrow row, cards row and fan-in rail.
-  const tierRows = (cards: Shown[], dots: TierDots, keys: { out: string; arrows: string; cards: string; inn: string }, outColor: string): void => {
+  const tierRows = (cards: Shown[], dots: TierDots, keys: { out: string; arrows: string; cards: string; inn: string }, outColor: string, last = false): void => {
     const live = cards.filter(e => e.width > 0)
     const centres = live.map(e => e.centre)
     const out = dots.out
@@ -700,6 +700,7 @@ export function drawFlow(surface: Surface, state: FlowState, props: FlowProps): 
     parts.push(segRow(surface, keys.out, railSegs(railLine(centres, trunk, columns, 'out'), outAt, outColor), columns))
     parts.push(segRow(surface, keys.arrows, arrowSegs(cards, columns), columns))
     parts.push(cardsRow(surface, cards, frame, keys.cards))
+    if (last) return // the last row has nothing under it to fan in to
     const inn = dots.inn
     const inSource = inn ? live.find(e => e.id === inn.id) : undefined
     const inAt = inn && inSource ? dotAt(inSource.centre, trunk, frame - inn.start) : null
@@ -714,21 +715,9 @@ export function drawFlow(surface: Surface, state: FlowState, props: FlowProps): 
     if (shown.length > 0) parts.push(stem(surface, 'stem-workers', columns))
   }
 
-  if (shown.length === 0) {
-    parts.push(stem(surface, 'stem-back', columns))
-  } else {
+  if (shown.length > 0) {
     parts.push(labelRow('delegate', props.delegate ?? ''))
-    tierRows(shown, state.dots.workers, { out: 'rail-out', arrows: 'arrows', cards: 'cards', inn: 'rail-in' }, 'suggestion')
-  }
-
-  const back = props.back
-  if (back) {
-    parts.push(
-      fixedBox(surface, 'back', columns, back.active ? { borderColor: 'claude' } : { borderDimColor: true }, [
-        [back.active ? { text: back.title, bold: true, color: 'claude' } : { text: back.title, dim: true }],
-        [{ text: back.line, dim: true }],
-      ]),
-    )
+    tierRows(shown, state.dots.workers, { out: 'rail-out', arrows: 'arrows', cards: 'cards', inn: 'rail-in' }, 'suggestion', true)
   }
 
   return <Box key="flow" flexDirection="column">{parts}</Box>

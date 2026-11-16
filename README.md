@@ -190,19 +190,20 @@ A unit the orchestrator carries out itself has no tier and takes `declared` (pen
 
 ## The Agent Board
 
-The pane is a flow diagram, top to bottom: the lead's box, the plan box (phase, wave, units finished), a row of Haiku workers whose results are leads, a row of Sonnet and Opus workers, and the box where results return to the lead.
+The pane is a flow diagram, top to bottom: the lead's box, the plan box (phase, wave, units finished), a row of Haiku workers whose results are leads, and a row of Sonnet and Opus workers. A card's own done state shows that its result is in.
 
 - **Colours by tier:** Haiku magenta, Sonnet blue, Opus lavender. A finished card turns green, a failed one red.
-- **Live cards:** each shows its model and task type, a moving bar, its current tool, elapsed time and tokens in and out. Dots travel along the rails as work goes out and comes back. Token counts are real, never estimated. When a tier ran on another model because its own is switched off, the card reads, for example, opus→Sonnet 5.5 · design and keeps the tier's colour.
+- **Live cards:** each shows its model and task type, a moving bar, its current tool, elapsed time and tokens in and out. Dots travel along the rails as work goes out, and back from the leads row. Token counts are real, never estimated. When a tier ran on another model because its own is switched off, the card reads, for example, opus→Sonnet 5.5 · design and keeps the tier's colour.
 - **Nothing slides past unchecked:** a finished Haiku or Sonnet card stays in its row, reading `lead · unchecked` or `draft · unchecked`, until its verdict is recorded.
-- **Tasks:** the header shows the active task and how many others are open. Counts follow the active task; a worker of another task that is still running keeps its card, marked with that task's id.
+- **Header:** the top row holds the title AGENT BOARD and the two tabs, and under it a row reads `task <id>`, how many other tasks are open and the task line. The title is left out below 32 columns.
+- **Tasks:** that row shows the active task and how many others are open. Counts follow the active task; a worker of another task that is still running keeps its card, marked with that task's id.
 - **Session log and detail:** below the diagram, a log of spawns, audit lines, verdicts and task changes. Click a card for its brief, routing and tools in flight.
 
 On a narrow terminal a one-line row above the prompt stands in for the pane.
 
 ## Token figures
 
-The pane has a row of two tabs at the top, **Board** and **Tokens**. Click one, or press its key: `b` for Board, `t` for Tokens. Keys only reach the pane once it holds the keyboard: press ctrl+x then tab, or click in it. `/board tokens` opens the pane on the Tokens tab (and leaves it open if it is already open); it answers in one short line and writes nothing to the transcript or to the model. When the terminal is too narrow to place the pane, the answer says the tab will show once it is wide enough. In the desktop app's widget seat there is no tab row and the Board is always drawn.
+The pane has a row at the top with the title and two tabs, **Board** and **Tokens**. Click one, or press its key: `b` for Board, `t` for Tokens. Keys only reach the pane once it holds the keyboard: press ctrl+x then tab, or click in it. `/board tokens` opens the pane on the Tokens tab (and leaves it open if it is already open); it answers in one short line and writes nothing to the transcript or to the model. When the terminal is too narrow to place the pane, the answer says the tab will show once it is wide enough. In the desktop app's widget seat there is no tab row and the Board is always drawn.
 
 A line under the status line on the Board tab still shows this task's tokens: the lead's and the delegated workers', and the share delegated.
 

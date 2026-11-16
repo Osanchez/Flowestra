@@ -823,7 +823,7 @@ test('the pane: the flow module with its props on the terminal, the still flow o
 
   // terminal: the Client keyed agent-flow, its props the flow's texts
   let ui: any = await $.ui.mount({ plugin: 'flowestra', component: 'Pane', requestId: 'flowestra', surface: 'terminal', props: PANE_PROPS(96) })
-  expect((await ui.find({ key: 'header' }))?.text).toBe('AGENT BOARD · task-1 · Build the board')
+  expect((await ui.find({ key: 'header' }))?.text).toBe('task task-1 · Build the board')
   const client = await ui.find({ type: 'Client', key: 'agent-flow' })
   expect(client).toBeDefined()
   expect(String(client.props.module)).toMatch(/flow\.client\.tsx$/)
@@ -841,7 +841,7 @@ test('the pane: the flow module with its props on the terminal, the still flow o
   expect(flow.leads).toEqual([]) // no Haiku worker: no leads row
   expect(flow.leadsLabel).toBe('')
   expect(flow.feed).toBe('')
-  expect(flow.back).toEqual({ title: 'back to lead', line: 'waiting on 2 · 1 in', active: false })
+  expect('back' in flow).toBe(false)
   expect(await ui.find({ key: 'still-flow' })).toBeUndefined() // the view drew no still flow
   // the session log: three spawns, one end and the phase, newest four shown
   const log = await ui.find({ key: 'log' })
@@ -851,7 +851,7 @@ test('the pane: the flow module with its props on the terminal, the still flow o
 
   // desktop: no Client; the view draws the still flow itself
   ui = await $.ui.mount({ plugin: 'flowestra', component: 'Pane', requestId: 'flowestra', surface: 'desktop', props: PANE_PROPS(96) })
-  expect((await ui.find({ key: 'header' }))?.text).toBe('AGENT BOARD · task-1 · Build the board')
+  expect((await ui.find({ key: 'header' }))?.text).toBe('task task-1 · Build the board')
   expect(await ui.find({ type: 'Client' })).toBeUndefined()
   expect(await ui.find({ key: 'still-flow' })).toBeDefined()
   const card = await ui.find({ key: 'slot-agent-write' })
@@ -883,7 +883,6 @@ test('the lead box: waiting with no events, running while the main loop works, w
   await step($, on, undefined, null)
   ui = await mount()
   expect((await flowOf(ui)).lead).toEqual({ title: 'Haiku 4.5 · main session', running: true, line: 'thinking', tokens: 'in 37.2k out 3.1k' })
-  expect((await flowOf(ui)).back.title).toBe('back to Haiku 4.5 · lead')
   expect((await ui.find({ key: 'legend' }))?.text).toBe('■ Haiku 4.5 · lead')
   expect((await ui.find({ key: 'status' }))?.text).toMatch(/^lead \[working\]/)
   await ui.unmount()
@@ -902,19 +901,19 @@ test('the pane height: the plan box and the session log by exact row accounting'
   await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, phase: 'design' } as any)
   const mount = (rows: number) =>
     $.ui.mount({ plugin: 'flowestra', component: 'Pane', requestId: 'flowestra', surface: 'terminal', props: { ...PANE_PROPS(96), scroll: { offset: 0, bodyRows: rows } } })
-  // no card: 14 fixed rows (nav, header, legend, lead box, stem, return box, status line); the plan box 6;
+  // no card: 10 fixed rows (nav, header, legend, spacer, lead box, status line); the plan box 6;
   // the log holds the one phase entry: the full log needs 4 rows, the compact one 1.
-  // Under 20 the plan box is left out and its rows go to the log.
+  // Under 16 the plan box is left out and its rows go to the log.
   for (const [rows, plan, log] of [
-    [14, false, 'none'],
-    [15, false, 'compact'],
-    [17, false, 'compact'],
-    [18, false, 'full'],
-    [19, false, 'full'],
-    [20, true, 'none'],
-    [21, true, 'compact'],
-    [23, true, 'compact'],
-    [24, true, 'full'],
+    [10, false, 'none'],
+    [11, false, 'compact'],
+    [13, false, 'compact'],
+    [14, false, 'full'],
+    [15, false, 'full'],
+    [16, true, 'none'],
+    [17, true, 'compact'],
+    [19, true, 'compact'],
+    [20, true, 'full'],
   ] as const) {
     const ui: any = await mount(rows)
     expect((await flowOf(ui)).plan !== null).toBe(plan)
@@ -947,7 +946,7 @@ test('a board stored by the earlier shape (board-1) is declined: the pane draws 
   )
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'flowestra', component: 'Pane', requestId: 'flowestra', surface, props: PANE_PROPS(80) })
-    expect((await ui.find({ key: 'header' }))?.text).toBe('AGENT BOARD · no task declared')
+    expect((await ui.find({ key: 'header' }))?.text).toBe('no task declared')
     expect(await ui.find({ key: 'log' })).toBeUndefined()
     await ui.unmount()
   }
