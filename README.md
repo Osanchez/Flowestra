@@ -46,14 +46,14 @@ Flowestra is for work where you want control over which model does what, and a r
 
 Measured on 18 fresh sessions (Flowestra 0.17.0, Opus 5.5 lead, 3 runs per cell, median):
 
-| Task | Without Flowestra | With 0.17.0 | Difference (total) | Opus tokens |
-|---|---:|---:|---:|---:|
-| Small: one fix | 1.00M tokens | 1.09M tokens | +9% (within spread) | −29% |
-| Larger: three fixes | 3.47M tokens | 2.72M tokens | −22% | −60% |
-| Three repositories, one shared contract | 1.81M tokens | 2.00M tokens | +10% (within spread) | −17% |
-| Fixed cost per request | | | +9k tokens, mostly cached | |
+| Task | Without Flowestra | With 0.17.0 | Difference (total) | Cost (total) | Opus tokens |
+|---|---:|---:|---:|---:|---:|
+| Small: one fix | 1.00M tokens | 1.09M tokens | +9% (within spread) | +4% | −29% |
+| Larger: three fixes | 3.47M tokens | 2.72M tokens | −22% | −16% | −60% |
+| Three repositories, one shared contract | 1.81M tokens | 2.00M tokens | +10% (within spread) | −5% | −17% |
+| Fixed cost per request | | | +9k tokens, mostly cached | | |
 
-Delegation happens on its own: in all 9 runs Sonnet workers wrote every change, no Opus worker ran, and the lead edited no project file. The Opus share fell on every task. Total tokens fell on the larger task and were about even on the other two. Output was higher on every task, by 9–36%. The three-repository task finished 29% faster, because its units ran in parallel. The tests passed in every run, including a hidden 40-test acceptance suite on the multi-repo task. The sample is small (3 runs per cell).
+Delegation happens on its own: in all 9 runs Sonnet workers wrote every change, no Opus worker ran, and the lead edited no project file. The Opus share fell on every task. Total tokens fell on the larger task and were about even on the other two. In dollars at list prices, which weigh Opus and Sonnet tokens by their price, the larger task cost 16% less, the three-repository task 5% less and the small one 4% more. Output was higher on every task, by 9–36%. The three-repository task finished 29% faster, because its units ran in parallel. The tests passed in every run, including a hidden 40-test acceptance suite on the multi-repo task. The sample is small (3 runs per cell).
 
 **[Full benchmark: method, every run, benefits, limitations and when it's worth it →](docs/BENCHMARK.md)**
 

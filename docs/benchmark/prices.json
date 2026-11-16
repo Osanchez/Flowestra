@@ -1,0 +1,14 @@
+{
+  "as_of": "2026-11-03",
+  "source": "Claude Code claude-api reference: model table and prompt-caching economics; cache writes 1.25x input for 5-minute TTL, 2x for 1-hour",
+  "unit": "USD per million tokens",
+  "models": {
+    "claude-opus-5-5": {"input": 4.00, "cache_write_5m": 5.00, "cache_write_1h": 8.00, "cache_read": 0.20, "output": 20.00},
+    "claude-sonnet-5-5": {"input": 2.00, "cache_write_5m": 2.50, "cache_write_1h": 4.00, "cache_read": 0.10, "output": 10.00},
+    "claude-haiku-5-5": {"input": 0.10, "cache_write_5m": 0.125, "cache_write_1h": 0.20, "cache_read": 0.01, "output": 0.50}
+  },
+  "notes": [
+    "Haiku 5.5's cache-read price is not published in the source; it is assumed at 0.1x input.",
+    "Haiku 5.5 prompts above 100K tokens are priced at $0.50 / $2.50, which is not modelled."
+  ]
+}
