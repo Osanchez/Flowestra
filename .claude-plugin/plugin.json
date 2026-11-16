@@ -1,6 +1,6 @@
 {
   "name": "flowestra",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Orchestrate Claude Code work across model tiers: a live Agent Board of your Opus, Sonnet and Haiku workers, a routing policy with a gate that enforces it, tasks across repositories, and a work journal on disk of every delegation.",
   "types": "./types/index.d.ts",
   "author": {
@@ -38,10 +38,10 @@
     },
     "gateOnError": {
       "type": "string",
-      "title": "When the gate fails",
-      "description": "allow (default): if a check of the spawn gate fails with an error, the spawn starts unchecked, and the board, the session log and the audit file say so. refuse: the spawn is refused instead. With refuse, a fault in Flowestra stops every delegation until it is fixed or this is set back to allow.",
-      "default": "allow",
-      "options": ["allow", "refuse"]
+      "title": "When a worker can't be verified",
+      "description": "Flowestra verifies every worker before it starts. If the verification itself breaks with an internal error, it can't say yes or no. start anyway (default): the worker starts unverified, and the board, the log and the audit file flag it. block: the worker is refused, which stops all delegation until the error is fixed.",
+      "default": "start anyway",
+      "options": ["start anyway", "block"]
     },
     "journalMasking": {
       "type": "boolean",

@@ -2145,7 +2145,7 @@ test('gate health: with the spawn check failing, the fallback check still refuse
   expect(gateOf(w).last?.outcome).toBe('started unchecked')
 })
 
-test('gate health: strict mode refuses a spawn the gate could not check', { options: { gateOnError: 'refuse' } }, async ($, on) => {
+test('gate health: strict mode refuses a spawn the gate could not check', { options: { gateOnError: 'block' } }, async ($, on) => {
   const w = world()
   engine(on, w)
   await start($)
@@ -2175,7 +2175,7 @@ test('gate health: a spec check that fails starts the spawn and is counted', asy
   expect(w.files[AUDIT_FILE]).toContain(` | s1 | agent-build | ${AUDIT.sonnet}\n`) // the checked spawn's own line too
 })
 
-test('gate health: strict mode refuses a spawn whose spec check fails', { options: { gateOnError: 'refuse' } }, async ($, on) => {
+test('gate health: strict mode refuses a spawn whose spec check fails', { options: { gateOnError: 'block' } }, async ($, on) => {
   const w = world()
   engine(on, w)
   await start($)
@@ -2204,7 +2204,7 @@ test('gate health: a spawn hook that throws before next lets the spawn start, co
   expect(w.uiLogs).toEqual([gateNotice(g.last!, AUDIT_FILE, false)])
 })
 
-test('gate health: strict mode refuses a spawn whose hook throws before next', { options: { gateOnError: 'refuse' } }, async ($, on) => {
+test('gate health: strict mode refuses a spawn whose hook throws before next', { options: { gateOnError: 'block' } }, async ($, on) => {
   const w = world()
   engine(on, w)
   await start($)

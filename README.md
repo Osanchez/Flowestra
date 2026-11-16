@@ -41,7 +41,7 @@ Each tier's model can be switched off (see "Choose worker models" below); the ti
 - a resumed worker (a message sent to a finished one) whose unit was rejected, whose task type has since been barred at its tier, or whose tier's model has been switched off since it started;
 - a worker whose unit names a spec file or a context item that does not exist.
 
-**When the gate itself fails.** A check that fails with an error does not block the session: by default the spawn starts unchecked. The refusals that need no board state (forks, the replaced built-in types, a model a worker may not run on) are still made. Each failure is shown: the board's status line reads `gate [degraded · 2 failed]` until the mod loads again, the session log and the audit file record it, and the orchestrator is told in the board's answer. To refuse spawns instead while the gate cannot check them, set "When the gate fails" to `refuse` in `/config`; a fault in the mod then stops all delegation until it is fixed.
+**When the gate itself fails.** A check that fails with an error does not block the session: by default the spawn starts unchecked. The refusals that need no board state (forks, the replaced built-in types, a model a worker may not run on) are still made. Each failure is shown: the board's status line reads `gate [degraded · 2 failed]` until the mod loads again, the session log and the audit file record it, and the orchestrator is told in the board's answer. To refuse spawns instead while the gate cannot check them, set "When a worker can't be verified" to `block` in `/config`; a fault in the mod then stops all delegation until it is fixed.
 
 **What the gate does not check.** The gate sees an agent when Claude Code asks the mod before starting it. These agents run with no unit, no tier check and no audit line; each is marked on its card (`ungated: …`), in the session log, in the board's answer and, except the unseen ones, in the audit file:
 
@@ -121,7 +121,7 @@ Installing the mod gives the main session the routing policy, the workers, the g
 
    When no model is on for a tier, work routed to it is refused and the orchestrator does it itself or asks you. A change applies from the next session.
 
-   "When the gate fails" (allow by default): refuse blocks a spawn the gate could not check instead of letting it start unchecked.
+   "When a worker can't be verified" (`start anyway` by default): `block` refuses a worker the gate could not check instead of letting it start unchecked.
 3. **Choose what the journal keeps.** Open `/config` and set "Mask secrets in the journal" (on by default) and "Journal content" (`full` by default, or `capped`, or `index`). A change applies from the next session. Nothing is deleted automatically; see `/journal` below.
 4. **Approved designs go to `.flowestra/decisions.md`** (`full` only). Each approved design is a dated entry in that file at the project root, and worker briefs point at that entry. Commit the folder or add it to `.gitignore`, as you prefer.
 5. **Add project constraints, if any.** A project's `CLAUDE.md` can list resources its work shares (one test database, one device, one editor) and can send a kind of work to a higher tier than the policy would. It should never send work to a lower one: the policy is the only source of routing rules.
@@ -216,7 +216,7 @@ Each task folder also holds state.bak.json, a backup of its state file. The work
 
 - **Briefs and results are stored in plain text** on your machine (see "What it holds" above). Masking is best effort. Nothing is deleted unless you run `/journal prune` and confirm it yourself.
 - **The built-in agent types listed above are unavailable** while the mod is loaded, to the main session and to every agent it starts. A skill that starts agents through the Agent tool is refused unless a unit covers each one; a skill that runs in its own agent is not checked (see "What the gate does not check").
-- **The gate governs agent starts, not everything a session does.** It checks the agents Claude Code tells mods about; the exceptions above are shown, not refused, and a fault in the mod lets spawns through unchecked unless "When the gate fails" is set to refuse. Every such case is on the board and in the audit file.
+- **The gate governs agent starts, not everything a session does.** It checks the agents Claude Code tells mods about; the exceptions above are shown, not refused, and a fault in the mod lets spawns through unchecked unless "When a worker can't be verified" is set to block. Every such case is on the board and in the audit file.
 - **Other mods that start agents of their own** go through the same gate, and are refused unless a unit covers them.
 - **The mod is generic.** It contains nothing specific to any project.
 

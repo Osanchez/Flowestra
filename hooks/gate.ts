@@ -12,10 +12,10 @@ import { EXEMPT_TYPES, formatDuration } from './state'
 export const GATE_SHAPE = 'gate-1'
 export const GATE_ON_ERROR_SETTING = 'gateOnError'
 
-/** `refuse` only when the setting is exactly `'refuse'`; otherwise `allow`. */
+/** `refuse` only when the setting is exactly `'block'`; otherwise `allow` (so `start anyway`, the old values `allow` and `refuse`, a missing value and anything else all mean allow). */
 export const gateOnError = (options: PluginOptions | undefined): 'allow' | 'refuse' => {
   const value: unknown = options?.[GATE_ON_ERROR_SETTING]
-  return value === 'refuse' ? 'refuse' : 'allow'
+  return value === 'block' ? 'refuse' : 'allow'
 }
 
 export const emptyHealth = (now: number): GateHealth => ({ checkFailures: 0, recordFailures: 0, last: null, since: now })
@@ -94,7 +94,7 @@ export const gateLogText = (f: GateFault, label: string | null): string =>
 /** The one-time transcript notice (3.4). */
 export const gateNotice = (f: GateFault, auditPath: string, strict: boolean): string =>
   `Flowestra: a check of the spawn gate failed (${f.where}: ${f.error}), so that spawn ` +
-  (strict ? 'was refused (setting "When the gate fails": refuse)' : 'started unchecked') +
+  (strict ? 'was refused (setting "When a worker can\'t be verified": block)' : 'started unchecked') +
   `. The board shows "gate degraded" until the mod loads again; every failure is written to ${auditPath}.`
 
 const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many)
@@ -124,7 +124,7 @@ export const gateAnswerLine = (h: GateHealth, now: number, auditPath: string): s
 
 /** The strict-mode refusal text (5.1). */
 export const strictRefusal = (where: GateCheck, error: string): string =>
-  `Spawn refused: the Agent Board's gate could not check this spawn (${where}: ${error}), and the Flowestra setting "When the gate fails" is set to refuse. Do the work yourself, or ask the user to set it back to allow in /config.`
+  `Spawn refused: the Agent Board's gate could not check this spawn (${where}: ${error}), and the Flowestra setting "When a worker can't be verified" is set to block. Do the work yourself, or ask the user to set it back to start anyway in /config.`
 
 /** Which pass rule a spawn falls under. A fork is `checked` (the gate refuses forks); a nested spawn is `checked` too. */
 export const classifySpawn = (e: {

@@ -37,12 +37,14 @@ describe('the setting', () => {
     expect(GATE_SHAPE).toBe('gate-1')
   })
 
-  test('only exactly refuse is refuse', () => {
+  test('only exactly block is refuse', () => {
     expect(gateOnError(undefined)).toBe('allow')
     expect(gateOnError({})).toBe('allow')
+    expect(gateOnError({ gateOnError: 'start anyway' })).toBe('allow')
     expect(gateOnError({ gateOnError: 'allow' })).toBe('allow')
-    expect(gateOnError({ gateOnError: 'REFUSE' })).toBe('allow')
-    expect(gateOnError({ gateOnError: 'refuse' })).toBe('refuse')
+    expect(gateOnError({ gateOnError: 'refuse' })).toBe('allow')
+    expect(gateOnError({ gateOnError: 'BLOCK' })).toBe('allow')
+    expect(gateOnError({ gateOnError: 'block' })).toBe('refuse')
   })
 })
 
@@ -164,13 +166,13 @@ describe('status, band, log, notice', () => {
       'Flowestra: a check of the spawn gate failed (spawn check: boom), so that spawn started unchecked. The board shows "gate degraded" until the mod loads again; every failure is written to /p/audit.log.',
     )
     expect(gateNotice(f, '/p/audit.log', true)).toBe(
-      'Flowestra: a check of the spawn gate failed (spawn check: boom), so that spawn was refused (setting "When the gate fails": refuse). The board shows "gate degraded" until the mod loads again; every failure is written to /p/audit.log.',
+      'Flowestra: a check of the spawn gate failed (spawn check: boom), so that spawn was refused (setting "When a worker can\'t be verified": block). The board shows "gate degraded" until the mod loads again; every failure is written to /p/audit.log.',
     )
   })
 
   test('strict refusal (5.1)', () => {
     expect(strictRefusal('spawn check', 'boom')).toBe(
-      'Spawn refused: the Agent Board\'s gate could not check this spawn (spawn check: boom), and the Flowestra setting "When the gate fails" is set to refuse. Do the work yourself, or ask the user to set it back to allow in /config.',
+      'Spawn refused: the Agent Board\'s gate could not check this spawn (spawn check: boom), and the Flowestra setting "When a worker can\'t be verified" is set to block. Do the work yourself, or ask the user to set it back to start anyway in /config.',
     )
   })
 })
