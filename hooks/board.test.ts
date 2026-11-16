@@ -571,6 +571,9 @@ describe('answers', () => {
   test('the description has the task lines and context', () => {
     expect(BOARD_TOOL_DESCRIPTION).toContain('- taskId: the task (workstream) this update is about: a short fixed id (2 to 32 characters, a-z, 0-9 and "-").')
     expect(BOARD_TOOL_DESCRIPTION).toContain('switch before you spawn for another one.')
+    expect(BOARD_TOOL_DESCRIPTION).toContain('Never call it alone')
+    expect(BOARD_TOOL_DESCRIPTION).toContain('a unit may be declared in the response that spawns it')
+    expect(BOARD_TOOL_DESCRIPTION).not.toContain('before you start each wave')
     expect(BOARD_TOOL_DESCRIPTION).toContain('- repo: the absolute path of the repository or folder the task works in (default: this session\'s).')
     expect(BOARD_TOOL_DESCRIPTION).toContain('- close: true closes the active task.')
     expect(BOARD_TOOL_DESCRIPTION.indexOf('- taskId:')).toBeGreaterThan(BOARD_TOOL_DESCRIPTION.indexOf('- task:'))
@@ -655,8 +658,8 @@ describe('the prompt section', () => {
   })
   test('is about 120 words and says what the brief asks', () => {
     const words = BOARD_PROMPT_SECTION_TEXT.split(/\s+/).length
-    expect(words >= 70 && words <= 150).toBe(true)
-    for (const needle of [BOARD_TOOL, 'analysis, design, approval, executing, testing, review, done', 'before each wave', 'description of 2 to 4 words starting with a verb', 'name equal to the id of the work unit', 'where the Agent tool takes no name, make the description equal to that unit\'s label', 'Never put token counts']) {
+    expect(words >= 70 && words <= 160).toBe(true)
+    for (const needle of [BOARD_TOOL, 'analysis, design, approval, executing, testing, review, done', 'never call it in a response of its own', 'description of 2 to 4 words starting with a verb', 'name equal to the id of the work unit', 'where the Agent tool takes no name, make the description equal to that unit\'s label', 'Never put token counts']) {
       expect(BOARD_PROMPT_SECTION_TEXT).toContain(needle)
     }
   })

@@ -349,15 +349,23 @@ test('logDiff: a kind becoming barred at haiku is logged once by the lead, with 
 
 test('logDiff: a kind becoming barred at sonnet is logged once, with its count, apart from the same kind at haiku', () => {
   const haikuBarred = [
-    { unitId: 'h1', tier: 'haiku' as const, kind: 'edit' as const, taskId: null },
-    { unitId: 'h2', tier: 'haiku' as const, kind: 'edit' as const, taskId: null },
+    { unitId: 'h1', tier: 'haiku' as const, kind: 'review' as const, taskId: null },
+    { unitId: 'h2', tier: 'haiku' as const, kind: 'review' as const, taskId: null },
   ]
-  const before = boardOf([], { rejects: [...haikuBarred, { unitId: 's1', tier: 'sonnet', kind: 'edit', taskId: null }] })
+  const before = boardOf([], { rejects: [...haikuBarred, { unitId: 's1', tier: 'sonnet', kind: 'review', taskId: null }] })
   const after = boardOf([], {
-    rejects: [...haikuBarred, { unitId: 's1', tier: 'sonnet', kind: 'edit', taskId: null }, { unitId: 's2', tier: 'sonnet', kind: 'edit', taskId: null }, { unitId: 's3', tier: 'sonnet', kind: 'edit', taskId: null }],
+    rejects: [...haikuBarred, { unitId: 's1', tier: 'sonnet', kind: 'review', taskId: null }, { unitId: 's2', tier: 'sonnet', kind: 'review', taskId: null }, { unitId: 's3', tier: 'sonnet', kind: 'review', taskId: null }],
   })
-  expect(logDiff(before, after, AT)).toEqual([{ at: AT, kind: 'verdict', who: 'lead', text: 'sonnet barred for edit (3 rejected)' }])
+  expect(logDiff(before, after, AT)).toEqual([{ at: AT, kind: 'verdict', who: 'lead', text: 'sonnet barred for review (3 rejected)' }])
   expect(logDiff(after, after, AT)).toEqual([])
+})
+
+test('logDiff: writing kinds rejected at sonnet are never logged as barred (0.17.0)', () => {
+  const before = boardOf([], { rejects: [{ unitId: 's1', tier: 'sonnet', kind: 'edit', taskId: null }] })
+  const after = boardOf([], {
+    rejects: [1, 2, 3].map(i => ({ unitId: `s${i}`, tier: 'sonnet' as const, kind: 'edit' as const, taskId: null })),
+  })
+  expect(logDiff(before, after, AT)).toEqual([])
 })
 
 test('logDiff: opus rejections never bar a kind; a board missing its rejects bars nothing', () => {

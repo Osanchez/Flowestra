@@ -16,8 +16,8 @@ Flowestra is for work where you want control over which model does what, and a r
 
 - **Multi-step changes in one repository.** The orchestrator writes the spec, a Sonnet worker implements and tests, and the orchestrator reviews. In the [benchmark](docs/BENCHMARK.md) this used 17% fewer tokens in total and 35–61% fewer Opus tokens than a plain session.
 - **Long sessions and multi-part projects.** Workers do the reading and the edit/test loop in contexts that end, so the lead's context stays small instead of growing every turn.
-- **Work across several repositories, for structure rather than savings.** The work splits into parallel units, one per repository, and shared contracts and migrations get an Opus worker by rule. In the benchmark's three-repository task this cost 46% more input than a plain session, at the same pass rate.
-- **Changes where a mistake does real damage (migrations, security, auth, data deletion).** These are routed to Opus by rule, and in the `full` workflow nothing is built before you approve a written design.
+- **Work across several repositories, for structure rather than savings.** The work splits into parallel units, one per repository, and shared contracts and migrations get an Opus-level design and review by rule, while Sonnet writes each repository's part. In the benchmark's three-repository task this cost 46% more input than a plain session, at the same pass rate.
+- **Changes where a mistake does real damage (migrations, security, auth, data deletion).** Their design and review are routed to Opus by rule (Sonnet writes the approved spec), and in the `full` workflow nothing is built before you approve a written design.
 - **Teams or audits that need to know what was done and why.** Every brief, result and verdict is in the journal, and approved designs are in `.flowestra/decisions.md`.
 - **Bulk mechanical work (searching, inventories, extraction, fix-until-green loops).** It goes to Haiku or Sonnet, in parallel where the units are independent.
 - **Seeing how agents spend tokens.** The board shows each worker's model, current tool and real token counts; the Tokens tab splits the lead from the workers.
@@ -32,9 +32,9 @@ Flowestra is for work where you want control over which model does what, and a r
 ## Limitations
 
 - **Fixed prompt overhead.** About 8.9k tokens of instructions are added to every request of the lead, mostly read from cache.
-- **Workers start cold.** Each rereads the files it needs, and a unit that fails at Sonnet is rerun on Opus (escalation), which adds tokens.
+- **Workers start cold.** Each rereads the files it needs, and work that fails at Sonnet is rerun on Opus, which adds tokens; a writing unit is instead retried once on Sonnet with a tightened spec, then you are asked.
 - **Slower on some work.** On the benchmark's larger task, total output rose 18% and wall-clock time 12% against a plain session.
-- **Dearer on cross-repository changes.** On the benchmark's three-repository contract change, total input rose 46% and Opus input 36%: in every run the policy sent one unit to an Opus worker (shared contract or migration), and the lead's own input fell only 15%.
+- **Dearer on cross-repository changes.** On the benchmark's three-repository contract change, total input rose 46% and Opus input 36%: in every run the policy sent one unit to an Opus worker (shared contract or migration), and the lead's own input fell only 15%. 0.17.0 keeps that writing on Sonnet; not yet re-measured.
 - **Small evidence base.** The benchmark is 3 runs per cell, with tasks of about 2–10 minutes: two in one repository and one across three small repositories. Hours-long work has not been measured yet.
 - **No counterfactual in the Tokens tab.** It shows what was spent, not what the same work would have used without the mod.
 - **The gate only sees agent starts.** Workflow agents, skills that run in their own agent, and agents started before the board loaded run unchecked; they are marked, not refused. See "What the gate does not check".
@@ -65,20 +65,20 @@ Delegation happens on its own: in all 9 runs the work went to workers, and the l
 |---|---|---|---|
 | `flowestra:haiku-worker` | Haiku | One read-only task: locate, extract, inventory. Its results are leads, never conclusions | Read, Grep, Glob |
 | `flowestra:sonnet-worker` | Sonnet | Specified work in one repository and one area, with written acceptance criteria and a named check. Its results are drafts the orchestrator verifies | Read, Bash, Edit, Write, WebFetch, WebSearch |
-| `flowestra:opus-worker` | Opus | Design, unknown root causes, cross-repository changes, security, migrations, and anything the other two gates do not pass | Everything the orchestrator has, except spawning agents |
+| `flowestra:opus-worker` | Opus | Design, unknown root causes, and the design and review of cross-repository, security and migration work. It does not write project files | Everything the orchestrator has, except spawning agents |
 
 Each tier's model can be switched off (see "Choose worker models" below); the tier's work then runs on another model, with the same tools and return format.
 
-**Implementation is always delegated.** The orchestrator keeps the planning and the review: framing, the spec, routing, the checks and the final review. Every change to the project's files (code, tests, docs, config) goes to a worker, usually Sonnet. Task size decides how: a small task (one area, one or two files) goes whole, tests included, to one Sonnet worker; a larger one is split by the files each unit owns, and units that write different files run in parallel. When the Sonnet switch is off, the orchestrator writes the implementation itself as a declared unit. Designs go to an Opus worker only when they need code the orchestrator has not read. Worker returns are kept to about 250 words: the detail is in the diff and the journal.
+**Sonnet writes.** The orchestrator keeps the planning and the review: framing, the spec, routing, the checks and the final review. Every change to the project's files (code, tests, docs, config) goes to a Sonnet-tier worker, however risky: an Opus trigger such as a migration or a shared contract decides who designs and reviews the change, not who writes it. Task size decides how: a small task goes whole, tests included, to one Sonnet worker; a larger one is split by the files each unit owns, and units that write different files run in parallel. When the Sonnet switch is off, that work runs on Opus; only with Opus off too does the orchestrator write it itself. A writing unit that fails is not rerun on Opus: the orchestrator (or an Opus debug worker) finds the cause and tightens the spec, Sonnet retries once, and then you are asked. Designs go to an Opus worker only when they need code the orchestrator has not read. Worker returns are kept to about 250 words: the detail is in the diff and the journal.
 
-**A routing policy, in one place.** The mod adds a Model Routing Policy to the orchestrator's instructions: a procedure to run for every delegation (any Opus trigger? does the Haiku gate hold? does the Sonnet gate hold? otherwise Opus), what each tier's brief must state, what each tier returns, and how failures escalate upward. Its text lives in `hooks/policy.ts` and nowhere else.
+**A routing policy, in one place.** The mod adds a Model Routing Policy to the orchestrator's instructions: a procedure to run for every delegation (any Opus trigger? does the Haiku gate hold? does the Sonnet gate hold? otherwise Opus; writing always goes to Sonnet), what each tier's brief must state, what each tier returns, and how failures escalate upward. Its text lives in `hooks/policy.ts` and nowhere else.
 
 **A gate that enforces it.** Before a worker starts, the board checks that a declared unit of work covers it, with a tier, a task type and an audit line of four parts: the task, the tier, the routing step that selected it, and what will catch an error. A worker with no such unit is refused. So are:
 
 - the built-in agent types the tier workers replace (`Explore`, `Plan`, `general-purpose`, `claude`, `web-fetch`, `claude-code-guide`);
 - forks, which would copy the whole conversation and run on the orchestrator's own model with no tier and no audit line;
 - an agent started by another agent that no declared unit covers, and a built-in type started by another agent;
-- a worker for a unit that was rejected, a third run of one unit at the same tier, and a task type barred at a tier after two rejections in a session;
+- a worker for a unit that was rejected, a third run of one unit at the same tier, a task type barred at a tier after two rejections in a session (writing at Sonnet is never barred), and an Opus unit that would write project files (edit, implement, tests, fix, docs);
 - a resumed worker (a message sent to a finished one) whose unit was rejected, whose task type has since been barred at its tier, or whose tier's model has been switched off since it started;
 - a worker whose unit names a spec file or a context item that does not exist.
 
@@ -204,13 +204,15 @@ A worker is linked to its unit by the Agent call's `name` (the unit id) or, wher
 
 ## The `AgentBoard` tool
 
+Send board updates with the next real action (a unit may be declared in the response that spawns it); a call on its own costs a request.
+
 | Field | Meaning |
 |---|---|
 | `taskId` | The task this update is about. A new id opens a task, an open id switches to it, and a known id from an earlier session resumes it from its state file |
 | `task` | The task's one-line title |
 | `repo` | The repository or folder the task works in (default: the session's) |
-| `phase` | analysis, design, approval, executing, testing, review or done |
-| `wave` | The wave of workers running or about to start |
+| `phase` | analysis, design, approval, executing, testing, review or done; moved to executing by the board when a writing unit starts |
+| `wave` | The wave of workers running or about to start; raised by the board when a later wave's worker starts |
 | `units` | The full list of the task's work units (it replaces the previous list) |
 | `close` | `true` closes the active task |
 

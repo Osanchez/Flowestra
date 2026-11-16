@@ -36,6 +36,7 @@ import {
   denyModelOverride,
   denyNested,
   denyNoModel,
+  denyOpusWriter,
   denyRejected,
   denyResumeRejected,
   denyResumeSwitched,
@@ -91,6 +92,7 @@ import {
 } from './state'
 import type { BoardUpdate, SpawnRequest } from './state'
 import { ALL_ON } from './models'
+import { WRITE_KINDS } from './policy'
 
 const T0 = 1_000_000
 const box = (b: Board, id: string): AgentBox => {
@@ -974,11 +976,11 @@ test('barred and isBarred: haiku and sonnet at BAR_AFTER rejects, opus never; ha
   const b: Board = {
     ...emptyBoard(T0),
     rejects: [
-      rej('a', 'sonnet', 'tests'),
+      rej('a', 'sonnet', 'review'),
       rej('b', 'haiku', 'edit'),
       rej('c', 'opus', 'design'),
       rej('d', 'haiku', 'locate'),
-      rej('e', 'sonnet', 'tests'),
+      rej('e', 'sonnet', 'review'),
       rej('f', 'haiku', 'locate'),
       rej('g', 'opus', 'design'),
       rej('h', 'haiku', 'edit'),
@@ -990,12 +992,12 @@ test('barred and isBarred: haiku and sonnet at BAR_AFTER rejects, opus never; ha
   expect(barred(b)).toEqual([
     { tier: 'haiku', kind: 'edit', n: 2 },
     { tier: 'haiku', kind: 'locate', n: 3 },
-    { tier: 'sonnet', kind: 'tests', n: 2 },
+    { tier: 'sonnet', kind: 'review', n: 2 },
   ])
   expect(isBarred(b, 'haiku', 'locate')).toBe(true)
-  expect(isBarred(b, 'sonnet', 'tests')).toBe(true)
+  expect(isBarred(b, 'sonnet', 'review')).toBe(true)
   expect(isBarred(b, 'sonnet', 'locate')).toBe(false)
-  expect(isBarred(b, 'haiku', 'tests')).toBe(false)
+  expect(isBarred(b, 'haiku', 'review')).toBe(false)
   expect(isBarred(b, 'opus', 'design')).toBe(false)
   // a board missing rejects (an older stored value) does not throw
   const old = { ...emptyBoard(T0), rejects: undefined } as unknown as Board
@@ -1009,17 +1011,31 @@ const barredBoard = (units: Unit[] = []): Board => ({
   rejects: [
     rej('r1', 'haiku', 'locate'),
     rej('r2', 'haiku', 'locate'),
-    rej('r3', 'sonnet', 'tests'),
-    rej('r4', 'sonnet', 'tests'),
+    rej('r3', 'sonnet', 'review'),
+    rej('r4', 'sonnet', 'review'),
     rej('r5', 'opus', 'design'),
     rej('r6', 'opus', 'design'),
   ],
 })
 
+test('0.17.0: writing kinds at sonnet are never barred, however many rejects', () => {
+  for (const kind of WRITE_KINDS) {
+    for (const n of [2, 3]) {
+      const rejects = Array.from({ length: n }, (_, i) => rej(`w${i}`, 'sonnet', kind))
+      const b: Board = { ...emptyBoard(T0), rejects }
+      expect(barred(b)).toEqual([])
+      expect(isBarred(b, 'sonnet', kind)).toBe(false)
+      expect(barredUnit(b, [tiered('N', 'sonnet', { kind })])).toBeNull()
+    }
+  }
+  const both: Board = { ...emptyBoard(T0), rejects: [rej('a', 'haiku', 'locate'), rej('b', 'haiku', 'locate'), rej('c', 'sonnet', 'review'), rej('d', 'sonnet', 'review'), rej('e', 'sonnet', 'implement'), rej('f', 'sonnet', 'implement')] }
+  expect(barred(both)).toEqual([{ tier: 'haiku', kind: 'locate', n: 2 }, { tier: 'sonnet', kind: 'review', n: 2 }])
+})
+
 test('barredUnit: a new unit of a barred tier and kind; not one already declared at that tier, of another kind or tier, or with a verdict', () => {
   const b = barredBoard([tiered('OLD')])
   expect(barredUnit(b, [unit('W', [], 'pending'), tiered('NEW')])?.id).toBe('NEW')
-  expect(barredUnit(b, [tiered('NS', 'sonnet', { kind: 'tests' })])?.id).toBe('NS')
+  expect(barredUnit(b, [tiered('NS', 'sonnet', { kind: 'review' })])?.id).toBe('NS')
   // opus is never barred
   expect(barredUnit(b, [tiered('NO', 'opus', { kind: 'design' })])).toBeNull()
   // already declared at the same tier
@@ -1194,8 +1210,12 @@ test('spawnCheck rule 5: the tier of the call against the unit', () => {
 })
 
 test('spawnCheck rule 6: a rejected unit; after the tier check, before barred', () => {
-  const text = 'Spawn refused (policy §8): unit "R" was rejected. Re-route the task upward under a new unit.'
-  expect(denyRejected('R')).toBe(text)
+  const text = 'Spawn refused (policy §8): unit "R" was rejected. Tighten the spec and retry it once at sonnet under a new unit; if that one fails too, ask the user.'
+  const old = 'Spawn refused (policy §8): unit "R" was rejected. Re-route the task upward under a new unit.'
+  expect(denyRejected('R', 'implement')).toBe(text)
+  expect(denyRejected('R')).toBe(old)
+  expect(denyRejected('R', 'locate')).toBe(old)
+  expect(denyRejected('R', 'review')).toBe(old)
   const b = gateBoard()
   expect(spawnCheck(b, sonnetReq({ name: 'R' }))).toBe(text)
   expect(spawnCheck(b, sonnetReq({ description: 'Redo the thing' }))).toBe(text)
@@ -1211,16 +1231,46 @@ test('spawnCheck rule 7: a barred tier and kind; before the retry rule', () => {
   expect(denyBarred('haiku', 'locate', 3)).toBe(text)
   const b: Board = {
     ...gateBoard(),
-    rejects: [rej('x', 'haiku', 'locate'), rej('y', 'haiku', 'locate'), rej('z', 'haiku', 'locate'), rej('p', 'sonnet', 'implement'), rej('q', 'sonnet', 'implement'), rej('r', 'opus', 'design'), rej('s', 'opus', 'design')],
+    units: [...gateBoard().units, labelled(tiered('SV', 'sonnet', { kind: 'review' }), 'Look it over')],
+    rejects: [rej('x', 'haiku', 'locate'), rej('y', 'haiku', 'locate'), rej('z', 'haiku', 'locate'), rej('p', 'sonnet', 'review'), rej('q', 'sonnet', 'review'), rej('p2', 'sonnet', 'implement'), rej('q2', 'sonnet', 'implement'), rej('r', 'opus', 'design'), rej('s', 'opus', 'design')],
   }
   expect(spawnCheck(b, req({ name: 'H' }))).toBe(text)
   expect(spawnCheck(b, req({ description: 'Find call sites' }))).toBe(text)
-  expect(spawnCheck(b, sonnetReq({ name: 'S' }))).toBe(denyBarred('sonnet', 'implement', 2))
+  expect(spawnCheck(b, sonnetReq({ name: 'SV' }))).toBe(denyBarred('sonnet', 'review', 2))
+  // writing at sonnet is never barred (0.17.0)
+  expect(spawnCheck(b, sonnetReq({ name: 'S' }))).toBeNull()
   // opus is never barred
   expect(spawnCheck(b, req({ subagentType: 'flowestra:opus-worker', workerTier: 'opus', name: 'O' }))).toBeNull()
   // barred before retry
   const ran: Board = { ...b, ...withAgents(b, withModel(mk('a1', 'done', T0, 'H'), HAIKU), withModel(mk('a2', 'done', T0, 'H'), HAIKU)) }
   expect(spawnCheck(ran, req({ name: 'H' }))).toBe(text)
+})
+
+test('0.17.0: denyRetry words itself by kind', () => {
+  expect(denyRetry('S', 'sonnet', 'implement')).toBe('Spawn refused (policy §8): unit "S" has already run twice at sonnet. Tighten the spec and declare a new unit, or ask the user.')
+  expect(denyRetry('S', 'sonnet', 'review')).toBe(denyRetry('S', 'sonnet'))
+  expect(denyRetry('H', 'haiku', 'locate')).toBe('Spawn refused (policy §8): unit "H" has already run twice at haiku. Never retry the same tier more than once: re-route it upward under a new unit.')
+})
+
+test('0.17.0: an opus unit of a writing kind is refused at spawn; the sonnet tier is where writing goes', () => {
+  expect(denyOpusWriter('O', 'implement', ALL_ON)).toBe(
+    'Spawn refused (policy §1): unit "O" is an opus unit of kind implement, and writing goes to the sonnet tier even under a §2 trigger (it runs on Sonnet). Declare it at sonnet and spawn flowestra:sonnet-worker; Opus designs and reviews it.',
+  )
+  expect(denyOpusWriter('O', 'docs', { opus: 'opus', sonnet: 'opus', haiku: 'haiku' })).toContain('(it runs on Opus)')
+  for (const kind of WRITE_KINDS) {
+    const b: Board = { ...gateBoard(), units: [tiered('O', 'opus', { kind })] }
+    expect(spawnCheck(b, opusReq())).toBe(denyOpusWriter('O', kind, ALL_ON))
+    expect(spawnCheck(b, opusReq({ models: { opus: 'opus', sonnet: 'opus', haiku: 'haiku' } }))).toBe(denyOpusWriter('O', kind, { opus: 'opus', sonnet: 'opus', haiku: 'haiku' }))
+  }
+  for (const kind of ['design', 'debug', 'review'] as const) {
+    const b: Board = { ...gateBoard(), units: [tiered('O', 'opus', { kind })] }
+    expect(spawnCheck(b, opusReq())).toBeNull()
+  }
+  // every model off: the unit is unavailable, not an opus writer
+  const w: Board = { ...gateBoard(), units: [tiered('O', 'opus', { kind: 'implement' })] }
+  expect(spawnCheck(w, opusReq({ models: NONE_ON }))).toBe(denyUnavailable('O', 'opus', NONE_ON))
+  // a sonnet writer is fine
+  expect(spawnCheck(gateBoard(), sonnetReq({ name: 'S' }))).toBeNull()
 })
 
 test('spawnCheck rule 8: two runs at the unit tier already; before the spec rule', () => {
@@ -1236,7 +1286,7 @@ test('spawnCheck rule 8: two runs at the unit tier already; before the spec rule
   expect(spawnCheck(mixed, req({ name: 'H' }))).toBeNull()
   // retry before spec
   const sp: Board = { ...b, ...withAgents(b, withModel(mk('s1', 'done', T0, 'SP'), SONNET), withModel(mk('s2', 'done', T0, 'SP'), SONNET)) }
-  expect(spawnCheck(sp, sonnetReq({ name: 'SP', specMissing: true }))).toBe(denyRetry('SP', 'sonnet'))
+  expect(spawnCheck(sp, sonnetReq({ name: 'SP', specMissing: true }))).toBe(denyRetry('SP', 'sonnet', 'implement'))
 })
 
 test('spawnCheck rule 9: a missing spec file', () => {
@@ -1582,7 +1632,7 @@ test('scoping by (taskId, unitId): the two-runs rule counts runs of the active t
   expect(spawnCheck(b, sonnetReq({ name: 'U1' }))).toBeNull()
   // t1's U1 ran twice
   const t1 = up(b, { taskId: 't1' }, T0 + 3)
-  expect(spawnCheck(t1, sonnetReq({ name: 'U1' }))).toBe(denyRetry('U1', 'sonnet'))
+  expect(spawnCheck(t1, sonnetReq({ name: 'U1' }))).toBe(denyRetry('U1', 'sonnet', 'implement'))
   // one run in t2 still passes
   const once = sonnetSpawn(b, 'b1', 'U1', T0 + 4)
   expect(spawnCheck(once, sonnetReq({ name: 'U1' }))).toBeNull()
@@ -1737,6 +1787,48 @@ test('per-task rows: a held card of the active task stays; once switched away it
   expect(tally(live)).toEqual({ done: 0, failed: 0, queued: 0 })
 })
 
+test('0.17.0 D-B: a spawn raises the wave, and a writing unit moves an early phase to executing', () => {
+  const units = [
+    tiered('W1', 'sonnet', { kind: 'implement', wave: 1 }),
+    tiered('W2', 'sonnet', { kind: 'tests', wave: 2 }),
+    tiered('R1', 'sonnet', { kind: 'review', wave: 3 }),
+    tiered('L1', 'haiku', { kind: 'locate', wave: 2 }),
+  ]
+  const base = (phase: BoardUpdate['phase'], wave: number | null = null) => up(emptyBoard(T0), { taskId: 't1', phase, wave, units })
+  for (const phase of [null, 'analysis', 'design', 'approval'] as const) {
+    const b = sonnetSpawn(base(phase ?? undefined), 'a', 'W1')
+    expect(b.phase).toBe('executing')
+    expect(b.wave).toBe(1)
+  }
+  // the wave rises and never falls
+  expect(sonnetSpawn(base('executing', 2), 'a', 'W1').wave).toBe(2)
+  expect(sonnetSpawn(base('executing', 1), 'a', 'W2').wave).toBe(2)
+  // testing and review are not touched; done neither
+  for (const phase of ['testing', 'review', 'done'] as const) expect(sonnetSpawn(base(phase), 'a', 'W1').phase).toBe(phase)
+  // a non-writing unit leaves the phase, but still raises the wave
+  const r = sonnetSpawn(base('design'), 'a', 'R1')
+  expect(r.phase).toBe('design')
+  expect(r.wave).toBe(3)
+  const l = applySpawn(base('analysis'), { agentId: 'h', description: 'Find', subagentType: 'flowestra:haiku-worker', model: HAIKU, name: 'L1' }, T0)
+  expect(l.phase).toBe('analysis')
+  // resumed, ungated and unlinked spawns change nothing
+  const b0 = base('design')
+  const started = sonnetSpawn(b0, 'a', 'W1')
+  const resumed = sonnetSpawn(started, 'a', 'W1', T0 + 1, { resumed: true })
+  expect(resumed.wave).toBe(started.wave)
+  const rewound = { ...started, phase: 'design' as const, wave: 0 }
+  const again = sonnetSpawn(rewound, 'a', 'W1', T0 + 1, { resumed: true })
+  expect([again.phase, again.wave]).toEqual(['design', 0])
+  const ungated = sonnetSpawn(b0, 'u', 'W1', T0, { ungated: { kind: 'workflow' } as never })
+  expect([ungated.phase, ungated.wave]).toEqual([b0.phase, b0.wave])
+  const unlinked = sonnetSpawn(b0, 'x', 'nope')
+  expect([unlinked.phase, unlinked.wave]).toEqual([b0.phase, b0.wave])
+  // a unit of a parked task is not the active task's
+  const parked = up(b0, { taskId: 't2', units: [tiered('P1', 'sonnet', { kind: 'implement' })] }, T0 + 1)
+  const toParked = up(parked, { taskId: 't1' }, T0 + 2)
+  expect(sonnetSpawn(toParked, 'p', 'P1').phase).toBe(toParked.phase)
+})
+
 test('B3.2: an accepted verdict withdraws the rejection of the same (taskId, unitId); a kind is no longer barred', () => {
   const twoRejected = [tiered('H1', 'haiku', { verdict: 'rejected' }), tiered('H2', 'haiku', { verdict: 'rejected' })]
   const b = up(emptyBoard(T0), { taskId: 't1', units: twoRejected })
@@ -1786,7 +1878,7 @@ test('spawnCheck: a context item that did not resolve is refused, right after th
   expect(spawnCheck(b, sonnetReq({ name: 'SP', contextMissing: '/x' }))).toBe(denyContext('SP', '/x'))
   // the retry rule before it
   const sp: Board = { ...b, ...withAgents(b, withModel(mk('s1', 'done', T0, 'SP'), SONNET), withModel(mk('s2', 'done', T0, 'SP'), SONNET)) }
-  expect(spawnCheck(sp, sonnetReq({ name: 'SP', contextMissing: '/x' }))).toBe(denyRetry('SP', 'sonnet'))
+  expect(spawnCheck(sp, sonnetReq({ name: 'SP', contextMissing: '/x' }))).toBe(denyRetry('SP', 'sonnet', 'implement'))
   // an uncovered call is refused for that, not for its context
   expect(spawnCheck(b, req({ name: 'X', contextMissing: '/x' }))).toBe(denyUndeclared('X'))
 })
@@ -2038,7 +2130,7 @@ test('spawnCheck: a nested spawn is held to a covering unit with its own refusal
   // a nested tier worker named for a covering unit with the right model passes, and the later checks run
   expect(spawnCheck(b, req({ name: 'H', nested: true }))).toBeNull()
   expect(spawnCheck(b, req({ name: 'H', nested: true, model: 'opus' }))).toBe(denyModelOverride('haiku', 'haiku', 'opus'))
-  expect(spawnCheck(b, req({ name: 'R', nested: true, subagentType: 'flowestra:sonnet-worker', workerTier: 'sonnet' }))).toBe(denyRejected('R'))
+  expect(spawnCheck(b, req({ name: 'R', nested: true, subagentType: 'flowestra:sonnet-worker', workerTier: 'sonnet' }))).toBe(denyRejected('R', 'implement'))
   // the main-loop text is unchanged
   expect(spawnCheck(b, req({ name: 'n' }))).toBe(denyUndeclared('n'))
   expect(spawnCheck(b, { subagentType: 'Explore', workerTier: null })).toBe(denyBuiltin('Explore'))
@@ -2082,16 +2174,29 @@ test('resumeCheck: a rejected unit, a barred kind, a switched model and an unava
     denyResumeSwitched('Fix it', 'opus', 'opus', 'sonnet'),
   )
   // a bar on (tier, kind) since it started
-  const sonnetUnits = [tiered('S1', 'sonnet', { kind: 'implement' })]
+  const sonnetUnits = [tiered('S1', 'sonnet', { kind: 'review' })]
   const barredB: Board = {
     ...resumeBoard({ unitId: 'S1' }, sonnetUnits, 'sonnet'),
     rejects: [
-      { unitId: 'x1', tier: 'sonnet', kind: 'implement', taskId: null },
-      { unitId: 'x2', tier: 'sonnet', kind: 'implement', taskId: null },
+      { unitId: 'x1', tier: 'sonnet', kind: 'review', taskId: null },
+      { unitId: 'x2', tier: 'sonnet', kind: 'review', taskId: null },
     ] as unknown as Board['rejects'],
   }
-  expect(barred(barredB)).toEqual([{ tier: 'sonnet', kind: 'implement', n: 2 }])
-  expect(spawnCheck(barredB, req({ resume: true, resumeOf: 'w1' }))).toBe(denyBarred('sonnet', 'implement', 2))
+  expect(barred(barredB)).toEqual([{ tier: 'sonnet', kind: 'review', n: 2 }])
+  expect(spawnCheck(barredB, req({ resume: true, resumeOf: 'w1' }))).toBe(denyBarred('sonnet', 'review', 2))
+  // writing at sonnet is never barred: a resume after two implement rejects passes
+  const writerB: Board = {
+    ...resumeBoard({ unitId: 'S1' }, [tiered('S1', 'sonnet', { kind: 'implement' })], 'sonnet'),
+    rejects: [rej('x1', 'sonnet', 'implement'), rej('x2', 'sonnet', 'implement')],
+  }
+  expect(spawnCheck(writerB, req({ resume: true, resumeOf: 'w1' }))).toBeNull()
+  // an opus writer started before 0.17.0 is not resumed
+  const opusWriter = resumeBoard({ unitId: 'O1' }, [tiered('O1', 'opus', { kind: 'implement' })], 'opus')
+  expect(spawnCheck(opusWriter, req({ resume: true, resumeOf: 'w1' }))).toBe(denyOpusWriter('O1', 'implement', ALL_ON))
+  expect(resumeCheck(opusWriter, { resumeOf: 'w1' })).toBe(denyOpusWriter('O1', 'implement', ALL_ON))
+  // a rejected writing unit's resume carries the writing wording
+  expect(denyResumeRejected('s1', 'implement')).toBe('Spawn refused (policy §8): unit "s1" was rejected, so its worker is not resumed. Tighten the spec and retry it once at sonnet under a new unit; if that one fails too, ask the user.')
+  expect(denyResumeRejected('s1', 'review')).toBe(denyResumeRejected('s1'))
   // Opus switched off: the box on an Opus model, routed opus
   const o = resumeBoard()
   const opusOff: WorkerModels = { opus: 'sonnet', sonnet: 'sonnet', haiku: 'haiku' }

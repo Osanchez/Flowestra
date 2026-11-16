@@ -455,7 +455,7 @@ export function toolArguments(e: Record<string, unknown>): Record<string, unknow
 
 export const BOARD_TOOL_DESCRIPTION = [
   'Updates the Agent Board, the live pane beside the chat that shows you (the orchestrator) and your worker agents.',
-  'Call it when the task or the phase changes, and before you start each wave of workers. Send only the fields that changed; every field is optional, but give at least one.',
+  'Never call it alone: send it in the same response as your next action (a unit may be declared in the response that spawns it), with only the fields that changed; every field is optional, but give at least one.',
   'Fields:',
   `- task: one-line summary of the whole task, at most ${TASK_MAX_CHARS} characters.`,
   '- taskId: the task (workstream) this update is about: a short fixed id (2 to 32 characters, a-z, 0-9 and "-"). An id that is not open opens a task (give its task line and, when it is not this session\'s folder, its repo); an open id switches to it; with no taskId the update goes to the active task. Units, phase and wave belong to their task, and a worker is always spawned under the active task: switch before you spawn for another one.',
@@ -611,7 +611,7 @@ export function answerBoardCall(input: unknown): { deny: string } | { update: Bo
 
 export const BOARD_PROMPT_SECTION_TEXT = [
   'Agent Board: a live pane shows you and your workers.',
-  `Keep it current with the ${BOARD_TOOL} tool (${BOARD_TOOL_FULL_NAME}): call it when the task or the phase changes and before each wave of workers, sending only what changed (the units list always whole).`,
+  `Keep it current with the ${BOARD_TOOL} tool (${BOARD_TOOL_FULL_NAME}), but never call it in a response of its own: send it with your next action (a spawn, a check, a read), only what changed (the units list always whole).`,
   `Phases, in order: ${PHASES.join(', ')}.`,
   'Give every Agent call a description of 2 to 4 words starting with a verb (for example "Write state reducers") and a name equal to the id of the work unit it carries out; where the Agent tool takes no name, make the description equal to that unit\'s label.',
   'Never put token counts in the board: they are measured.',

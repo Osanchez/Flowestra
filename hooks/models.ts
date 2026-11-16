@@ -61,12 +61,6 @@ export const modelsNote = (models: WorkerModels): string => {
       `No model is on for ${joinWords(unavailable.map(t => `${t}-tier`), 'or')} work: a unit at ${unavailable.length === 1 ? 'that tier' : 'those tiers'} is refused at spawn, so do that work yourself or ask the user to turn a worker model back on.`,
     )
   }
-  if (models.sonnet !== null && models.sonnet !== 'sonnet') {
-    const m = tierTitle(models.sonnet)
-    parts.push(
-      `Implementation that the Sonnet tier would carry is done by you as declared units, not by an ${m}-run worker; other Sonnet-tier work (reviews, summaries, exploration) still runs on ${m}.`,
-    )
-  }
   parts.push(ROUTING_UNCHANGED)
   if ((models.haiku !== null && models.haiku === models.sonnet) || (models.sonnet !== null && models.sonnet === models.opus)) {
     parts.push(ESCALATION)

@@ -3,7 +3,7 @@ import type { ModelUsage } from 'claude-code'
 
 import type { AgentBox, Board, BoxStatus, Live, Phase, Routed, Row, TaskKind, TaskSlot, Tier, Tokens, Unit, UngatedMark, WorkerModels } from '../types'
 import { ALL_ON, offList, tierTitle } from './models'
-import { KINDS_BY_TIER } from './policy'
+import { KINDS_BY_TIER, WRITE_KINDS } from './policy'
 
 // A running worker with no event at all for this long gets the quiet mark (owner's decision 2).
 export const QUIET_SECONDS = 120
@@ -416,8 +416,17 @@ export function applySpawn(board: Board, info: SpawnInfo, now: number): Board {
     flow: { dir: 'out', at: now },
     tokensPartial: info.resumed ? (prev?.tokensPartial ?? false) : false,
   }
-  return put(board, prev ? { ...prev, ...fields } : newBox(info.agentId, now, fields))
+  const put1 = put(board, prev ? { ...prev, ...fields } : newBox(info.agentId, now, fields))
+  // 0.17.0: a started unit raises the wave and moves the phase to executing when it writes. Never backwards.
+  const unit = !info.resumed && !info.ungated && linked !== null ? board.units.find(u => u.id === linked) : undefined
+  if (!unit || !unit.tier) return put1
+  const phase = unit.kind !== null && unit.kind !== undefined && WRITE_KINDS.includes(unit.kind) && (put1.phase === null || EARLY_PHASES.includes(put1.phase))
+    ? 'executing'
+    : put1.phase
+  return { ...put1, wave: Math.max(put1.wave ?? 0, unit.wave), phase }
 }
+
+const EARLY_PHASES: readonly Phase[] = ['analysis', 'design', 'approval']
 
 export function applyTurnStart(board: Board, agentId: string | undefined, now: number): Board {
   const box = boxFor(board, agentId, now)
@@ -1069,7 +1078,7 @@ export function isHeld(board: Board, box: AgentBox): boolean {
 
 // Rejected units of one task type at one tier that bar the type at that tier
 // for the session (policy §8). Enforced for haiku and sonnet; opus rejections
-// are only recorded.
+// are only recorded. Writing kinds at sonnet are never barred (0.17.0): writing has no tier above it.
 export const BAR_AFTER = 2
 export const BARRED_TIERS: readonly Tier[] = ['haiku', 'sonnet']
 
@@ -1083,6 +1092,7 @@ export function barred(board: Board): Barred[] {
   const groups: Barred[] = []
   for (const r of board.rejects ?? []) {
     if (!r || !BARRED_TIERS.includes(r.tier) || r.kind === null || r.kind === undefined) continue
+    if (r.tier === 'sonnet' && WRITE_KINDS.includes(r.kind)) continue
     const g = groups.find(x => x.tier === r.tier && x.kind === r.kind)
     if (g) g.n += 1
     else groups.push({ tier: r.tier, kind: r.kind, n: 1 })
@@ -1206,13 +1216,23 @@ export function denyUnavailable(id: string, tier: Tier, models: WorkerModels): s
   return `Spawn refused: unit "${id}" is routed to ${tier}, and no worker model is on for ${tier}-tier work (the Flowestra settings switch off ${offList(models)}). Do that work yourself, or ask the user to turn a worker model back on in /config.`
 }
 
+const isWriting = (kind: TaskKind | null | undefined): boolean => kind !== null && kind !== undefined && WRITE_KINDS.includes(kind)
+
+/** An opus unit of a writing kind (policy §1: writing goes to Sonnet). */
+export function denyOpusWriter(id: string, kind: TaskKind, models: WorkerModels): string {
+  return `Spawn refused (policy §1): unit "${id}" is an opus unit of kind ${kind}, and writing goes to the sonnet tier even under a §2 trigger (it runs on ${tierTitle(models.sonnet ?? 'sonnet')}). Declare it at sonnet and spawn flowestra:sonnet-worker; Opus designs and reviews it.`
+}
+
 /** A unit of a kind its tier no longer takes (policy §3). */
 export function denyKind(id: string, tier: Tier, kind: TaskKind): string {
   return `Spawn refused (policy §3): unit "${id}" is a ${tier} unit of kind ${kind}, which ${tier} no longer takes (${tier} takes ${KINDS_BY_TIER[tier].join(', ')}). Re-route it to a higher tier under a new unit.`
 }
 
 /** A unit the orchestrator rejected (policy §8). */
-export function denyRejected(id: string): string {
+export function denyRejected(id: string, kind?: TaskKind | null): string {
+  if (isWriting(kind)) {
+    return `Spawn refused (policy §8): unit "${id}" was rejected. Tighten the spec and retry it once at sonnet under a new unit; if that one fails too, ask the user.`
+  }
   return `Spawn refused (policy §8): unit "${id}" was rejected. Re-route the task upward under a new unit.`
 }
 
@@ -1222,7 +1242,10 @@ export function denyBarred(tier: Tier, kind: TaskKind, n: number): string {
 }
 
 /** A unit that already ran twice at its tier (policy §8). */
-export function denyRetry(id: string, tier: Tier): string {
+export function denyRetry(id: string, tier: Tier, kind?: TaskKind | null): string {
+  if (isWriting(kind)) {
+    return `Spawn refused (policy §8): unit "${id}" has already run twice at ${tier}. Tighten the spec and declare a new unit, or ask the user.`
+  }
   return `Spawn refused (policy §8): unit "${id}" has already run twice at ${tier}. Never retry the same tier more than once: re-route it upward under a new unit.`
 }
 
@@ -1250,7 +1273,10 @@ export function denyBuiltinNested(type: string): string {
 }
 
 /** A resume of the worker of a unit the orchestrator rejected (policy §8). */
-export function denyResumeRejected(id: string): string {
+export function denyResumeRejected(id: string, kind?: TaskKind | null): string {
+  if (isWriting(kind)) {
+    return `Spawn refused (policy §8): unit "${id}" was rejected, so its worker is not resumed. Tighten the spec and retry it once at sonnet under a new unit; if that one fails too, ask the user.`
+  }
   return `Spawn refused (policy §8): unit "${id}" was rejected, so its worker is not resumed. Re-route the task upward under a new unit.`
 }
 
@@ -1288,11 +1314,12 @@ export function resumeCheck(board: Board, req: Pick<SpawnRequest, 'resumeOf' | '
   if (!box || !box.routed) return null
   const unit = unitOf(board, box)
   const id = box.unitId ?? box.label
-  if (unit?.verdict === 'rejected') return denyResumeRejected(id)
+  if (unit?.verdict === 'rejected') return denyResumeRejected(id, box.routed.kind)
   const tier = box.routed.tier
   const bar = barred(board).find(x => x.tier === tier && x.kind === box.routed!.kind)
   if (bar) return denyBarred(tier, bar.kind, bar.n)
   const models = req.models ?? ALL_ON
+  if (tier === 'opus' && isWriting(box.routed.kind)) return denyOpusWriter(id, box.routed.kind!, models)
   const runsOn = models[tier]
   if (runsOn === null) return denyResumeUnavailable(id, tier, models)
   const ran = modelTier(box.model)
@@ -1357,14 +1384,15 @@ export function spawnCheck(board: Board, req: SpawnRequest): string | null {
   } else if (modelTier(req.model) !== runsOn) {
     return denyNoModel(u.id, tier, runsOn)
   }
-  if (u.verdict === 'rejected') return denyRejected(u.id)
+  if (u.verdict === 'rejected') return denyRejected(u.id, u.kind)
   const bar = barred(board).find(x => x.tier === tier && x.kind === u.kind)
   if (bar) return denyBarred(tier, bar.kind, bar.n)
   const runs = Object.values(board.agents).filter(
     b => b.id !== MAIN_ID && carries(board, b, board.taskId, u.id) && runTier(board, b) === tier,
   )
-  if (runs.length >= 2) return denyRetry(u.id, tier)
+  if (runs.length >= 2) return denyRetry(u.id, tier, u.kind)
   if (!KINDS_BY_TIER[tier].includes(u.kind)) return denyKind(u.id, tier, u.kind)
+  if (tier === 'opus' && WRITE_KINDS.includes(u.kind)) return denyOpusWriter(u.id, u.kind, models)
   if (req.specMissing) return denySpec(u.id, u.spec ?? '')
   if (given(req.contextMissing)) return denyContext(u.id, req.contextMissing)
   return null

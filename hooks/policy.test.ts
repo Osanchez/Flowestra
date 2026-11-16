@@ -102,7 +102,10 @@ describe('the policy text', () => {
     expect(ROUTING_POLICY_TEXT).toContain('\n<task> | <tier> | <§1 step and conditions that selected it> | <what catches an error>\n')
     expect(ROUTING_POLICY_TEXT.endsWith(last)).toBe(true)
     expect(ROUTING_POLICY_TEXT.endsWith('\n')).toBe(false)
-    expect(ROUTING_POLICY_TEXT.split('\n').length).toBe(90)
+    expect(ROUTING_POLICY_TEXT.split('\n').length).toBe(93)
+    expect(ROUTING_POLICY_TEXT).toContain('Writing (edit, implement, tests, fix, docs) goes to Sonnet even under a §2\ntrigger: triggers decide who designs and reviews it, not who writes it.')
+    expect(ROUTING_POLICY_TEXT).toContain('design-level assumption: Opus. Writing instead: you, or an Opus debug worker,\n  tighten the spec; Sonnet retries once under a new unit, then ask the user.')
+    expect(ROUTING_POLICY_TEXT).toContain('tier up for the rest of the session, writing excepted.')
   })
   test('Haiku is read-only: no execute or edit task, METHOD_USED names searches and reads', () => {
     expect(ROUTING_POLICY_TEXT).not.toContain('EXECUTE & REPORT')
@@ -163,11 +166,12 @@ describe('the policy section', () => {
       'the built-in types Explore, Plan, general-purpose, claude, web-fetch and claude-code-guide: the tier workers replace them, and web reading goes to a Sonnet or Opus worker, which both have the web tools.',
       'names the file in spec, and its worker is refused while that file does not exist',
       'After you check a worker\'s output (§7), send the units again with its verdict, "accepted" or "rejected".',
-      'after two rejections of one kind at haiku or sonnet that kind is refused at that tier for the rest of the session',
+      'after two rejections of one kind at haiku or sonnet that kind is refused at that tier for the rest of the session, writing excepted',
       'Each audit line is also written to this session\'s audit file.',
     ]) {
       expect(ROUTING_BOARD_NOTE).toContain(needle)
     }
+    expect(ROUTING_BOARD_NOTE).not.toContain('never retry a tier more than once')
   })
   test('the board note ends with the fork, context, task and web sentences, in order, on one line', () => {
     const sentences = [

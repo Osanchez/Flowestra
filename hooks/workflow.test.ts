@@ -20,10 +20,10 @@ describe('the texts', () => {
   })
 
   test('word counts', () => {
-    expect(words(workflowText('light'))).toBeGreaterThanOrEqual(370)
-    expect(words(workflowText('light'))).toBeLessThanOrEqual(410)
+    expect(words(workflowText('light'))).toBeGreaterThanOrEqual(340)
+    expect(words(workflowText('light'))).toBeLessThanOrEqual(380)
     expect(words(workflowText('full'))).toBeGreaterThanOrEqual(1040)
-    expect(words(workflowText('full'))).toBeLessThanOrEqual(1130)
+    expect(words(workflowText('full'))).toBeLessThanOrEqual(1080)
   })
 
   test('0.16.0: who writes is in both texts; the design worker and briefs are scaled to the task', () => {
@@ -31,14 +31,21 @@ describe('the texts', () => {
       expect(workflowText(mode)).toContain('**Who writes.**')
       expect(workflowText(mode)).toContain('- **Every change to the project\'s files** (code, tests, docs, config) goes to a worker')
       expect(workflowText(mode)).toContain('- **Task size decides how, not whether.**')
-      expect(workflowText(mode)).toContain('- **Exception:** when no writing worker is available')
+      expect(workflowText(mode)).not.toContain('**Exception:**')
+      expect(workflowText(mode)).not.toContain('Opus tier where an Opus trigger applies')
+      expect(workflowText(mode)).toContain('which gives all writing to the Sonnet tier')
       expect(workflowText(mode)).not.toContain('Do it yourself')
       expect(workflowText(mode)).not.toContain('When to delegate')
     }
     expect(WORKFLOW_STEPS_TEXT).toContain('otherwise the orchestrator drafts it itself, to the same standard')
     expect(WORKFLOW_STEPS_TEXT).toContain('each unit at its own section and the sections it lists as inputs')
-    expect(WORKFLOW_STEPS_TEXT).toContain('Implementation units are carried out by workers in waves (by the orchestrator only under the exception above).')
+    expect(WORKFLOW_STEPS_TEXT).toContain('Implementation units are carried out by workers in waves (by the orchestrator only when no worker model is on).')
     expect(WORKFLOW_STEPS_TEXT).not.toContain('**Small designs.**')
+  })
+
+  test('0.17.0: A1 and the cross-project line', () => {
+    expect(workflowText('light')).toContain('except writing, which stays with Sonnet')
+    expect(workflowText('full')).toContain('the step 2 test decides, per repository')
   })
 
   test('no trailing newline', () => {
