@@ -2246,3 +2246,58 @@ describe('a substituted run (routed.ranOn differs from the unit\'s tier)', () =>
     expect(c.warn).toBe(true)
   })
 })
+
+describe('ungated marks and the degraded gate (0.11.0)', () => {
+  const marked = () => board({}, [agent('main'), agent('w1', { model: HAIKU, ungated: { why: 'workflow', run: 'wf_1' } })])
+  const healthy = { checkFailures: 0, recordFailures: 0, last: null, since: NOW - 600_000 }
+  const degraded = { ...healthy, checkFailures: 2 }
+
+  test('a marked card: model line, warn and tier', () => {
+    const c = flowProps(vmOf(marked())).leads.find(w => w.id === 'w1')!
+    expect(c.model).toBe('Haiku 5.5 · ungated: workflow')
+    expect(c.warn).toBe(true)
+    expect(c.tier).toBe('haiku')
+  })
+
+  test('a marked card of another task still reads ungated', () => {
+    const b = taskBoard([slot('ab-journal', 'Journal work')], [agent('h1', { model: HAIKU, taskId: 'ab-journal', ungated: { why: 'resumed' } })])
+    const c = flowProps(vmOf(b)).workers.find(w => w.id === 'h1') ?? flowProps(vmOf(b)).leads.find(w => w.id === 'h1')
+    expect(c?.model).toBe('Haiku 5.5 · ungated: resumed')
+  })
+
+  test('detail lines: the warning, the run id, no task or route lines', () => {
+    const b = marked()
+    const lines = detailLines(vmOf(b), b.agents.w1!, 70)
+    expect(lines.slice(0, 3)).toEqual([
+      { text: `general-purpose · ${HAIKU}`, dim: true },
+      { text: 'ungated (workflow): no unit, tier or audit line was checked', color: 'warning' },
+      { text: 'run: wf_1' },
+    ])
+    expect(lines.some(l => l.text.startsWith('task:') || l.text.startsWith('route:'))).toBe(false)
+  })
+
+  test('detail lines of a non-workflow mark carry no run line', () => {
+    const b = board({}, [agent('main'), agent('w1', { model: HAIKU, ungated: { why: 'exempt' } })])
+    const lines = detailLines(vmOf(b), b.agents.w1!, 70)
+    expect(lines[1]).toEqual({ text: 'ungated (exempt): no unit, tier or audit line was checked', color: 'warning' })
+    expect(lines.some(l => l.text.startsWith('run:'))).toBe(false)
+  })
+
+  test('statusParts: unchanged with no gate and with a healthy gate; a degraded gate comes first', () => {
+    const b = marked()
+    const base = statusParts(vmOf(b))
+    expect(statusParts(vmOf(b, { gate: healthy }))).toEqual(base)
+    expect(base.some(p => p.label === 'gate')).toBe(false)
+    const d = statusParts(vmOf(b, { gate: degraded }))
+    expect(d[0]).toEqual({ label: 'gate', value: 'degraded · 2 failed', warn: true })
+    expect(d.slice(1)).toEqual(base)
+  })
+
+  test('bandText: the gate part after the title when degraded, unchanged otherwise', () => {
+    const b = marked()
+    const base = bandText(vmOf(b))
+    expect(bandText(vmOf(b, { gate: healthy }))).toBe(base)
+    expect(bandText(vmOf(b, { gate: degraded }))).toBe(base.replace('Agent Board  ', 'Agent Board  gate degraded (2)  '))
+    expect(bandText(vmOf(b, { gate: degraded })).startsWith('Agent Board  gate degraded (2)  ')).toBe(true)
+  })
+})

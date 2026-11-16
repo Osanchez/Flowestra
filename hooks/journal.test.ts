@@ -4,10 +4,10 @@ import type { TaskSlot, Unit } from '../types'
 import {
   CONTEXT_ITEM_CAP, CONTEXT_TOTAL_CAP, ENTRY_SPLIT_BYTES, INDEX_LINE_MAX,
   auditPath, auditTaskPart, buildEntry, configRoot, contextLine, entryContext, entryName, entryPath, escapeSections, extractContext,
-  fitLine, hashHex, headingSection, indexText, journalRoot, lineKey, mergeShardTexts, mergeShards, parseContextItem,
-  parseShard, parseStateJson, parseStateWriter, phaseDir, phaseIndexLine, phaseIndexPath, repoIndexLine, repoIndexPath,
+  entryFromText, fitLine, hashHex, headingSection, indexText, journalRoot, lineKey, mergeShardTexts, mergeShards, parseContextItem,
+  parseEntryFileName, parseShard, parseStateJson, parseStateWriter, phaseDir, phaseIndexLine, phaseIndexPath, repoIndexLine, repoIndexPath,
   repoKey, resultPartName, rootIndexLine, rootIndexPath, shardLine, shardPath, stateJson, stateJsonPath, stateMd,
-  stateMdPath, taskDir, taskIndexLine, taskIndexPath, unescapeSections, utf8Length, withContext,
+  stateBakPath, stateMdPath, stateUnreadablePath, taskLineOf, phaseLineOfData, CONTEXT_STATUS, taskDir, taskIndexLine, taskIndexPath, unescapeSections, utf8Length, withContext,
 } from './journal'
 import type { EntryData } from './journal'
 
@@ -436,5 +436,98 @@ describe('context block (W3)', () => {
     expect(r.status.map(s => s.status)).toEqual([
       'cut at 32000 of 64000', 'cut at 32000 of 64000', 'cut at 32000 of 64000', 'path only',
     ])
+  })
+})
+
+describe('U3 additions (0.11.0): file names, state copies, moved line logic', () => {
+  test('parseEntryFileName: a real name gives the unit id and the 8-character agent part', () => {
+    const name = `${entryName(T0, 'u3', 'a1b2c3d4e5f6')}.md`
+    expect(name).toBe('20261115-090807-u3-a1b2c3d4.md')
+    expect(parseEntryFileName(name)).toEqual({ unitId: 'u3', agent8: 'a1b2c3d4' })
+  })
+  test('parseEntryFileName: unit ids and agent parts that hold dashes', () => {
+    expect(parseEntryFileName(`${entryName(T0, 'wb-ui-u-2', 'agent-abcdef12')}.md`)).toEqual({ unitId: 'wb-ui-u-2', agent8: 'agent-ab' })
+    expect(parseEntryFileName('20261115-090807-u-x-12345678.md')).toEqual({ unitId: 'u-x', agent8: '12345678' })
+    expect(parseEntryFileName('20261115-090807-u-x-1-2-3-4-.md')).toEqual({ unitId: 'u-x', agent8: '1-2-3-4-' })
+  })
+  test('parseEntryFileName: rejects part files, index.md, state.md, short names and other shapes', () => {
+    const e = entryName(T0, 'u3', 'a1b2c3d4')
+    for (const n of [
+      `${e}.result.md`, `${e}.result.2.md`, `${e}.result.10.md`, 'index.md', 'state.md', 'state.json', '.shards', '',
+      '20261115-090807-u3-a1b2c3d4', '20261115-090807-u3-a1b2c3d4.txt',
+      '20261115-090807--a1b2c3d4.md', '20261115-090807-u3-a1b2c3d.md', '20261115-090807-a1b2c3d4.md',
+      'x0261115-090807-u3-a1b2c3d4.md', '20261115_090807-u3-a1b2c3d4.md', '20261115-090807-u3_a1b2c3d4.md',
+    ]) expect(parseEntryFileName(n)).toBeNull()
+  })
+  test('state copy paths', () => {
+    expect(stateBakPath('/j', 'app-123456', 'wb-ui')).toBe('/j/app-123456/wb-ui/state.bak.json')
+    expect(stateUnreadablePath('/j', 'app-123456', 'wb-ui', T0)).toBe('/j/app-123456/wb-ui/state.unreadable-20261115-090807.json')
+  })
+  test('phaseLineOfData is the documented phase line for the data, in the same fields', () => {
+    const d = data()
+    const line = phaseLineOfData('20261115-090807-u3-a1b2c3d4.md', d)
+    expect(line).toBe(`20261115-090807-u3-a1b2c3d4.md | ${d.unitId} | sonnet | implement | done | accepted | ${d.brief.length} | ${'Done: it works.'.length} | write reducers`)
+    expect(line).toBe(phaseIndexLine({
+      file: '20261115-090807-u3-a1b2c3d4.md', unitId: d.unitId, tier: 'sonnet', kind: 'implement', status: 'done', verdict: 'accepted',
+      briefChars: d.brief.length, resultChars: 15, audit: d.audit,
+    }))
+  })
+  test('phaseLineOfData sums the results of every run, and shows dashes for none', () => {
+    const d = data({ resumes: [{ message: 'm', result: 'more' }, { message: 'n', result: null }] })
+    expect(phaseLineOfData('f.md', d).split(' | ')[7]).toBe(String('Done: it works.'.length + 4))
+    const none = phaseLineOfData('f.md', data({ result: null, resumes: [], verdict: null, tier: null, kind: null, audit: null, status: 'running' }))
+    expect(none.startsWith(`f.md | u3 | - | - | running | unchecked | ${'Do the thing.'.length} | - |`)).toBe(true)
+  })
+  test('taskLineOf counts the verdicts of the phase lines', () => {
+    const lines = [
+      'a.md | u1 | sonnet | implement | done | accepted | 1 | 2 | x',
+      'b.md | u2 | sonnet | implement | done | rejected | 1 | 2 | x',
+      'c.md | u3 | sonnet | implement | done | unchecked | 1 | 2 | x',
+      'd.md | u4 | sonnet | implement | done | accepted | 1 | 2 | x',
+    ]
+    expect(taskLineOf('executing', lines, T0)).toBe('executing | 4 | 2/1/1 | 2026-11-15T09:08:07.000Z')
+    expect(taskLineOf('testing', [], T0)).toBe('testing | 0 | 0/0/0 | 2026-11-15T09:08:07.000Z')
+  })
+  test('entryFromText round-trips an entry built by buildEntry, with its context items', () => {
+    const d = data({
+      context: [{ item: '/docs/d.md#A', status: 'inlined 19 chars' }, { item: 'wb-ui:u-1', status: 'cut at 32000 of 40000' }, { item: '/f.md', status: 'path only' }],
+      resumes: [{ message: 'one more', result: 'more answer' }],
+    })
+    expect(entryFromText(buildEntry('e1', d).text)).toEqual(d)
+    const running = data({ endedMs: null, status: 'running', verdict: null, verdictMs: null, result: null, phase: null, wave: null })
+    expect(entryFromText(buildEntry('e1', running).text)).toEqual(running)
+    expect(entryFromText('not an entry')).toBeNull()
+    expect(entryFromText('')).toBeNull()
+  })
+  test('CONTEXT_STATUS reads the three status forms of the context line', () => {
+    const got = [...'a (inlined 5 chars), b (cut at 2 of 9), c d (path only)'.matchAll(CONTEXT_STATUS)].map(m => [m[1], m[2]])
+    expect(got).toEqual([['a', 'inlined 5 chars'], ['b', 'cut at 2 of 9'], ['c d', 'path only']])
+  })
+  test('torn input: an entry cut inside its header parses to null', () => {
+    const text = buildEntry('e1', data()).text
+    expect(entryFromText(text.slice(0, text.indexOf('verdict:') + 4))).toBeNull()
+    expect(entryFromText(text.slice(0, text.indexOf('## Brief') - 1))).toBeNull()
+    expect(entryFromText(text.slice(0, 30))).toBeNull()
+  })
+  test('torn input: an entry cut inside its result parses, with the shorter result', () => {
+    const d = data({ result: 'abcdefghij'.repeat(10) })
+    const text = buildEntry('e1', d).text
+    const cut = text.indexOf('## Result\n') + '## Result\n'.length + 30
+    const got = entryFromText(text.slice(0, cut))
+    expect(got).not.toBeNull()
+    expect(got?.result).toBe('abcdefghij'.repeat(3))
+    expect(got?.brief).toBe(d.brief)
+  })
+  test('torn input: a state.json cut half way parses to null', () => {
+    const full = stateJson(input())
+    expect(parseStateJson(full)).not.toBeNull()
+    expect(parseStateJson(full.slice(0, Math.floor(full.length / 2)))).toBeNull()
+  })
+  test('torn input: a shard line cut in its third field is still kept, with the cut line', () => {
+    const line = shardLine(T0, 'k', 'k | a | b | c | d | e')
+    const cut = line.slice(0, line.length - 6)
+    expect(cut.split('\t')).toHaveLength(3)
+    expect(parseShard(cut)).toEqual([{ at: '2026-11-15T09:08:07.000Z', key: 'k', line: 'k | a | b | c |' }])
+    expect(parseShard(line.slice(0, line.lastIndexOf('\t') + 1))).toEqual([])
   })
 })

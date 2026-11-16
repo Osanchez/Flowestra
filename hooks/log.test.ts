@@ -574,3 +574,53 @@ test('logDiff: opus work substituted to sonnet but run on Haiku logs "unit says 
   const after = boardOf([mk('h', { model: HAIKU, unitId: 'u1', routed })], { units: [unit('u1')] })
   expect(logDiff(boardOf([]), after, AT).filter(e => e.kind === 'audit').map(e => e.text)).toEqual(['ran on Haiku 5.5, unit says opus on sonnet'])
 })
+
+const marked = (id: string, mark: AgentBox['ungated'], over: Partial<AgentBox> = {}): AgentBox => mk(id, { ungated: mark, ...over })
+const ungatedEntries = (entries: LogEntry[]): LogEntry[] => entries.filter(e => e.kind === 'audit')
+
+test('logDiff: a new box marked workflow logs one ungated entry, never the no-audit one', () => {
+  const x = marked('a1', { why: 'workflow', run: 'wf_1' })
+  const out = logDiff(emptyBoard(T0), boardOf([x]), AT)
+  expect(ungatedEntries(out)).toEqual([
+    { at: AT, kind: 'audit', who: 'Do a1', text: 'ungated: workflow run wf_1: its agents start unchecked' },
+  ])
+  expect(out.some(e => e.text === NO_AUDIT)).toBe(false)
+})
+
+test('logDiff: a second box of the same workflow run logs none; a box of another run logs one', () => {
+  const a = marked('a1', { why: 'workflow', run: 'wf_1' })
+  const b = marked('a2', { why: 'workflow', run: 'wf_1' })
+  const c = marked('a3', { why: 'workflow', run: 'wf_2' })
+  const before = boardOf([a])
+  expect(ungatedEntries(logDiff(before, boardOf([a, b]), AT))).toEqual([])
+  expect(ungatedEntries(logDiff(before, boardOf([a, c]), AT)).map(e => e.text)).toEqual([
+    'ungated: workflow run wf_2: its agents start unchecked',
+  ])
+  expect(logDiff(before, boardOf([a, b]), AT).some(e => e.kind === 'spawned' && e.who === 'Do a2')).toBe(true)
+})
+
+test('logDiff: an already marked box logs the ungated entry once', () => {
+  const x = marked('a1', { why: 'workflow', run: 'wf_1' })
+  const board = boardOf([x])
+  expect(ungatedEntries(logDiff(board, board, AT))).toEqual([])
+})
+
+test('logDiff: resumed, exempt, unseen and nested marks read per the spec', () => {
+  const text = (why: 'resumed' | 'exempt' | 'unseen' | 'nested', type = 'general-purpose'): string[] =>
+    ungatedEntries(logDiff(emptyBoard(T0), boardOf([marked('a1', { why }, { type })]), AT)).map(e => e.text)
+  expect(text('resumed')).toEqual(['ungated: resumed run of an agent no unit covered'])
+  expect(text('exempt', 'statusline-setup')).toEqual(['ungated: exempt type statusline-setup'])
+  expect(text('unseen')).toEqual(['ungated: not seen by the gate (a skill in its own agent, or started before the board loaded)'])
+  expect(text('nested')).toEqual(['ungated: started by another agent'])
+})
+
+test('logDiff: a marked box with a covering audited unit still only logs the ungated entry', () => {
+  const x = marked('a1', { why: 'resumed' }, { unitId: 'u1' })
+  const out = logDiff(emptyBoard(T0), boardOf([x], { units: [unit('u1')] }), AT)
+  expect(ungatedEntries(out).map(e => e.text)).toEqual(['ungated: resumed run of an agent no unit covered'])
+})
+
+test('logDiff: a box with ungated null behaves as an unmarked one', () => {
+  const out = logDiff(emptyBoard(T0), boardOf([mk('a1', { ungated: null })]), AT)
+  expect(ungatedEntries(out).map(e => e.text)).toEqual([NO_AUDIT])
+})

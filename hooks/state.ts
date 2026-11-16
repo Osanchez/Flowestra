@@ -1,7 +1,7 @@
 import { atom } from 'claude-code'
 import type { ModelUsage } from 'claude-code'
 
-import type { AgentBox, Board, BoxStatus, Live, Phase, Routed, Row, TaskKind, TaskSlot, Tier, Tokens, Unit, WorkerModels } from '../types'
+import type { AgentBox, Board, BoxStatus, Live, Phase, Routed, Row, TaskKind, TaskSlot, Tier, Tokens, Unit, UngatedMark, WorkerModels } from '../types'
 import { ALL_ON, offList, tierTitle } from './models'
 import { KINDS_BY_TIER } from './policy'
 
@@ -175,7 +175,7 @@ function boxFor(board: Board, agentId: string | undefined, now: number): AgentBo
   if (id === MAIN_ID) {
     return newBox(MAIN_ID, now, { label: MAIN_LABEL, type: 'orchestrator', status: 'running', startedAt: now })
   }
-  return newBox(id, now, { status: 'running', tokensPartial: true })
+  return newBox(id, now, { status: 'running', tokensPartial: true, ungated: { why: 'unseen' } })
 }
 
 /** A worker box known only by its id so far (its label is its id); never the orchestrator. */
@@ -357,6 +357,7 @@ export type SpawnInfo = {
   promptChars?: number | null
   resumed?: boolean // true when the spawn resumes an existing agent
   models?: WorkerModels // the worker models the settings give at spawn; absent = all on
+  ungated?: UngatedMark | null // set when the gate did not hold the spawn to a unit: no link to a unit, no routing
 }
 
 /**
@@ -379,15 +380,17 @@ export function applySpawn(board: Board, info: SpawnInfo, now: number): Board {
   const kept = info.resumed === true ? prev : undefined
   const taskId = kept ? (kept.taskId ?? null) : board.taskId
   const linkable = taskId === null || taskId === board.taskId
-  const linked = !linkable
+  const linked = info.ungated || !linkable
     ? null
     : info.name && unitIds(board).has(info.name)
       ? info.name
       : !info.name
         ? (unitByLabel(board, info.description)?.id ?? null)
         : null
-  const unitId = linked ?? prev?.unitId ?? null
-  const routed = kept
+  const unitId = info.ungated ? null : (linked ?? prev?.unitId ?? null)
+  const routed = info.ungated
+    ? null
+    : kept
     ? (kept.routed ?? null)
     : routedOf(unitId !== null ? board.units.find(u => u.id === unitId) : null, info.models)
   const fields: Partial<AgentBox> = {
@@ -397,6 +400,7 @@ export function applySpawn(board: Board, info: SpawnInfo, now: number): Board {
     unitId,
     taskId,
     routed,
+    ungated: info.ungated ?? null,
     name: info.name ?? prev?.name ?? null,
     parentId: info.parentAgentId ?? prev?.parentId ?? null,
     status: 'starting',
@@ -555,6 +559,7 @@ export function reconcile(board: Board, list: readonly ListEntry[], now: number)
           label: cutLabel(entry.description, type),
           type,
           unitId: linked,
+          ungated: { why: 'unseen' },
           name: entry.name ?? null,
           parentId: entry.parentId ?? null,
           status: mapped ?? 'running',
@@ -568,7 +573,7 @@ export function reconcile(board: Board, list: readonly ListEntry[], now: number)
     let box = prev
     if (box.label === box.id) box = { ...box, label: cutLabel(entry.description, type), type }
     else if (!box.type) box = { ...box, type }
-    if (box.unitId === null && linked && (box.taskId === null || box.taskId === board.taskId)) box = { ...box, unitId: linked }
+    if (box.unitId === null && linked && !neverLinked(box) && (box.taskId === null || box.taskId === board.taskId)) box = { ...box, unitId: linked }
     if (box.name === null && entry.name) box = { ...box, name: entry.name }
     if (box.parentId === null && entry.parentId) box = { ...box, parentId: entry.parentId }
     if (mapped && mapped !== box.status && !(ENDED.has(box.status) && mapped === 'waiting')) {
@@ -654,6 +659,7 @@ function applyUnits(board: Board, units: readonly Unit[]): Board {
   let agents = board.agents
   for (const [id, box] of Object.entries(board.agents)) {
     if (box.taskId !== null && box.taskId !== undefined && box.taskId !== taskId) continue
+    if (neverLinked(box)) continue
     let unitId = box.name !== null && ids.has(box.name) ? box.name : box.unitId !== null && ids.has(box.unitId) ? box.unitId : null
     if (unitId === null && box.name === null && id !== MAIN_ID) unitId = unitByLabel(board, box.label)?.id ?? null
     if (unitId !== box.unitId) {
@@ -950,10 +956,11 @@ export function rowOf(board: Board, box: AgentBox): Row {
   return runTier(board, box) === 'haiku' ? 'leads' : 'workers'
 }
 
-export type AuditIssue = 'none' | 'no-audit' | 'tier-mismatch'
+export type AuditIssue = 'none' | 'no-audit' | 'tier-mismatch' | 'ungated'
 
 /**
- * What is wrong with a box's routing (policy §9): 'no-audit' when it carries
+ * What is wrong with a box's routing (policy §9): 'ungated' when the gate did
+ * not hold it to a unit (a mark, read first); 'no-audit' when it carries
  * out no unit with a tier and an audit line; 'tier-mismatch' when its model is
  * known and runs on another tier than its unit declares; otherwise (and for the
  * orchestrator) 'none'. The routing recorded at spawn (`routed`) is read first;
@@ -963,6 +970,7 @@ export type AuditIssue = 'none' | 'no-audit' | 'tier-mismatch'
  */
 export function auditIssue(board: Board, box: AgentBox): AuditIssue {
   if (box.id === MAIN_ID) return 'none'
+  if (ungatedOf(box) !== null) return 'ungated'
   const routed = box.routed ?? null
   let tier: Tier | null
   if (routed !== null) {
@@ -978,6 +986,17 @@ export function auditIssue(board: Board, box: AgentBox): AuditIssue {
     return 'tier-mismatch'
   }
   return 'none'
+}
+
+/** The mark that says the gate did not hold the agent to a unit, or null (a box stored before 0.11 has none). */
+export function ungatedOf(box: AgentBox): UngatedMark | null {
+  return box.ungated ?? null
+}
+
+/** True for a box the gate let through without a unit (workflow, resumed, nested, exempt): never linked to a unit by name or label. */
+export function neverLinked(box: AgentBox): boolean {
+  const why = ungatedOf(box)?.why
+  return why === 'workflow' || why === 'resumed' || why === 'nested' || why === 'exempt'
 }
 
 /** The units that depend on `unitId`, in list order. */
@@ -1072,6 +1091,7 @@ export type SpawnRequest = {
   name?: string | null
   description?: string | null
   fork?: boolean; workflow?: boolean; resume?: boolean
+  resumeOf?: string | null // the resumed agent's id
   nested?: boolean // spawned from a subagent's loop, not the main loop
   models?: WorkerModels // the worker models the settings give; absent = all on
   specMissing?: boolean // the covering unit names a spec file that does not exist
@@ -1187,16 +1207,96 @@ export function denyContext(id: string, item: string): string {
   return `Spawn refused: unit "${id}" names context "${item}", which is no journal entry or file. Name an existing entry or file.`
 }
 
-/** A fork from the main loop (policy §1, §9): it runs on the orchestrator's model with no tier and no audit line. */
+/** An agent started by another agent that no declared unit covers (policy §9). */
+export function denyNested(name: string | null): string {
+  if (!given(name)) {
+    return "Spawn refused (policy §9): an agent started by another agent must carry out a unit the orchestrator declared, and this call has no name and its description matches no unit's label. Only the orchestrator declares units: finish your own task, and say in your answer what further work needs a worker."
+  }
+  return `Spawn refused (policy §9): an agent started by another agent must carry out a unit the orchestrator declared, and no unit "${name}" with a tier, a kind and an audit line is declared. Only the orchestrator declares units: finish your own task, and say in your answer what further work needs a worker.`
+}
+
+/** A built-in type the tier workers replace, started by another agent (policy §1). */
+export function denyBuiltinNested(type: string): string {
+  return `Spawn refused (policy §1): the built-in type "${type}" is not used under the Model Routing Policy, and only the orchestrator delegates. Finish your own task, and say in your answer what further work needs a worker.`
+}
+
+/** A resume of the worker of a unit the orchestrator rejected (policy §8). */
+export function denyResumeRejected(id: string): string {
+  return `Spawn refused (policy §8): unit "${id}" was rejected, so its worker is not resumed. Re-route the task upward under a new unit.`
+}
+
+/** A resume of a worker whose tier has no worker model on now. */
+export function denyResumeUnavailable(id: string, tier: Tier, models: WorkerModels): string {
+  return `Spawn refused: the worker of unit "${id}" is not resumed: no worker model is on for ${tier}-tier work now (the Flowestra settings switch off ${offList(models)}). Do that work yourself, or ask the user to turn a worker model back on in /config.`
+}
+
+/** A resume of a worker that runs on another model than its tier's now. */
+export function denyResumeSwitched(id: string, tier: Tier, ran: Tier, runsOn: Tier): string {
+  return `Spawn refused: the worker of unit "${id}" runs on ${tierTitle(ran)}, but ${tier}-tier work now runs on ${tierTitle(runsOn)} (the Flowestra settings changed since it started). Spawn flowestra:${tier}-worker again for the unit, or re-route it.`
+}
+
+/** A tier worker spawned when no worker model is on for its tier (the fallback check only). */
+export function denyUnavailableWorker(workerTier: Tier, models: WorkerModels): string {
+  return `Spawn refused: no worker model is on for ${workerTier}-tier work (the Flowestra settings switch off ${offList(models)}). Do that work yourself, or ask the user to turn a worker model back on in /config.`
+}
+
+/** A fork (policy §1, §9): it runs on the orchestrator's model with no tier and no audit line. */
 export function denyFork(): string {
   return 'Spawn refused (policy §1, §9): a fork copies this whole conversation and runs on your own model, with no tier and no audit line. Route the task with §1, declare its unit with AgentBoard and spawn the tier\'s worker; for the context earlier work built, name the journal entries and the decisions.md entry it must read in the unit\'s context.'
 }
 
 /**
+ * A resumed agent (a message to a finished one) is re-checked when the board
+ * saw it routed: refused when its unit was rejected, when its kind is barred at
+ * its tier, when no model is on for its tier now, or when it runs on another
+ * model than the settings give its tier now. It is not counted as a run and
+ * its covering unit, spec, context and kind are not checked again. An agent the
+ * board does not know, or knows without `routed`, passes (the caller marks it
+ * ungated).
+ */
+export function resumeCheck(board: Board, req: Pick<SpawnRequest, 'resumeOf' | 'models'>): string | null {
+  const box = given(req.resumeOf) ? board.agents[req.resumeOf] : undefined
+  if (!box || !box.routed) return null
+  const unit = unitOf(board, box)
+  const id = box.unitId ?? box.label
+  if (unit?.verdict === 'rejected') return denyResumeRejected(id)
+  const tier = box.routed.tier
+  const bar = barred(board).find(x => x.tier === tier && x.kind === box.routed!.kind)
+  if (bar) return denyBarred(tier, bar.kind, bar.n)
+  const models = req.models ?? ALL_ON
+  const runsOn = models[tier]
+  if (runsOn === null) return denyResumeUnavailable(id, tier, models)
+  const ran = modelTier(box.model)
+  if (ran !== null && ran !== runsOn) return denyResumeSwitched(id, tier, ran, runsOn)
+  return null
+}
+
+/**
+ * The refusals that need neither the board nor the disk, for when the full gate
+ * failed with an error: a fork; a replaced built-in; a tier worker given a model
+ * of another tier than the settings give its tier; a tier worker whose tier has
+ * no model on. Every one is also refused by `spawnCheck` whatever the board
+ * holds. A workflow agent, a resume or an exempt type gets none (the full gate
+ * passes those without a unit check).
+ */
+export function boardFreeCheck(req: SpawnRequest): string | null {
+  if (req.fork) return denyFork()
+  if (req.workflow || req.resume || EXEMPT_TYPES.includes(req.subagentType)) return null
+  if (REFUSED_BUILTINS.includes(req.subagentType)) return req.nested ? denyBuiltinNested(req.subagentType) : denyBuiltin(req.subagentType)
+  if (req.workerTier === null || req.workerTier === undefined) return null
+  const models = req.models ?? ALL_ON
+  const runsOn = models[req.workerTier]
+  if (runsOn === null) return denyUnavailableWorker(req.workerTier, models)
+  if (given(req.model) && modelTier(req.model) !== runsOn) return denyModelOverride(req.workerTier, runsOn, req.model)
+  return null
+}
+
+/**
  * The reason an Agent call is refused under the Model Routing Policy, or null
- * when it may start. The rules in order, the first match wins: a fork from the
- * main loop is refused; forks, workflows, resumes and nested spawns pass;
- * exempt types pass; refused built-ins; no covering unit (in the active task)
+ * when it may start. The rules in order, the first match wins: a fork (from
+ * any loop) is refused; a workflow agent passes; a resume is re-checked by
+ * `resumeCheck`; exempt types pass; refused built-ins (their own text when
+ * nested); no covering unit (its own text when nested) (in the active task)
  * with a tier, a kind and an audit line (with no name, the refusal names a
  * unit of a parked task the description matches); a tier no worker model is
  * on for (`req.models`, absent meaning all on); the call's tier (worker type)
@@ -1207,13 +1307,15 @@ export function denyFork(): string {
  * resolve.
  */
 export function spawnCheck(board: Board, req: SpawnRequest): string | null {
-  if (req.fork && !req.nested) return denyFork()
-  if (req.fork || req.workflow || req.resume || req.nested) return null
+  if (req.fork) return denyFork()
+  if (req.workflow) return null
+  if (req.resume) return resumeCheck(board, req)
   if (EXEMPT_TYPES.includes(req.subagentType)) return null
-  if (REFUSED_BUILTINS.includes(req.subagentType)) return denyBuiltin(req.subagentType)
+  if (REFUSED_BUILTINS.includes(req.subagentType)) return req.nested ? denyBuiltinNested(req.subagentType) : denyBuiltin(req.subagentType)
   const u = coveringUnit(board, req)
   const tier = unitTier(u)
   if (u === null || tier === null || u.kind === null || u.kind === undefined || !u.audit) {
+    if (req.nested) return denyNested(given(req.name) ? req.name : null)
     if (given(req.name)) return denyUndeclared(req.name)
     return denyUndeclared(null, u === null ? parkedMatch(board, req.description) : null)
   }

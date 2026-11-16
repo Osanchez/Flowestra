@@ -22,20 +22,27 @@ import {
   auditIssue,
   barred,
   barredUnit,
+  boardFreeCheck,
   boardAtom,
   coveringUnit,
   cutLabel,
   denyBarred,
   denyBuiltin,
+  denyBuiltinNested,
   denyContext,
   denyFork,
   denyKind,
   denyModelOverride,
+  denyNested,
   denyNoModel,
   denyRejected,
+  denyResumeRejected,
+  denyResumeSwitched,
+  denyResumeUnavailable,
   denyRetry,
   denySpec,
   denyUnavailable,
+  denyUnavailableWorker,
   denyUndeclared,
   denyWrongWorker,
   emptyBoard,
@@ -58,6 +65,7 @@ import {
   parkedMatch,
   prettyModel,
   reconcile,
+  resumeCheck,
   emptyLive,
   liveAtom,
   resetBoard,
@@ -76,6 +84,7 @@ import {
   totals,
   unitByLabel,
   unitOf,
+  ungatedOf,
   unitState,
   withdrawn,
 } from './state'
@@ -1087,9 +1096,9 @@ test('coveringUnit: by name, by description when there is no name; the name wins
   expect(coveringUnit(b, { name: 'nope', description: 'Find call sites' })).toBeNull()
 })
 
-test('spawnCheck rule 1: workflows, resumes, nested spawns and nested forks pass untouched', () => {
+test('spawnCheck rule 1: workflows and resumes of an unknown agent pass untouched', () => {
   const b = gateBoard()
-  const flags: Array<Partial<SpawnRequest>> = [{ workflow: true }, { resume: true }, { nested: true }, { fork: true, nested: true }]
+  const flags: Array<Partial<SpawnRequest>> = [{ workflow: true }, { resume: true }]
   for (const flag of flags) {
     // even a refused built-in with no unit, or a rejected unit
     expect(spawnCheck(b, { subagentType: 'Explore', workerTier: null, ...flag })).toBeNull()
@@ -1749,7 +1758,7 @@ test('B3.2: an accepted verdict withdraws the rejection of the same (taskId, uni
   expect(up(legacy, { units: [tiered('H1', 'haiku', { verdict: 'accepted' })] }).rejects).toEqual(legacy.rejects)
 })
 
-test('spawnCheck: a fork from the main loop is refused first, even when a unit covers it; a nested fork passes', () => {
+test('spawnCheck: a fork is refused first, even when a unit covers it and from a nested loop', () => {
   const text =
     "Spawn refused (policy §1, §9): a fork copies this whole conversation and runs on your own model, with no tier and no audit line. Route the task with §1, declare its unit with AgentBoard and spawn the tier's worker; for the context earlier work built, name the journal entries and the decisions.md entry it must read in the unit's context."
   expect(denyFork()).toBe(text)
@@ -1759,7 +1768,7 @@ test('spawnCheck: a fork from the main loop is refused first, even when a unit c
   expect(spawnCheck(b, { subagentType: 'Explore', workerTier: null, fork: true })).toBe(text)
   expect(spawnCheck(b, req({ name: 'H', fork: true, workflow: true }))).toBe(text)
   expect(spawnCheck(b, req({ name: 'H', fork: true, resume: true }))).toBe(text)
-  expect(spawnCheck(b, req({ name: 'H', fork: true, nested: true }))).toBeNull()
+  expect(spawnCheck(b, req({ name: 'H', fork: true, nested: true }))).toBe(text)
   expect(spawnCheck(b, req({ name: 'H', fork: false }))).toBeNull()
 })
 
@@ -1937,4 +1946,261 @@ test('applySpawn records ranOn from the models; a resumed spawn keeps the old ro
   const again = spawnWith(o, 'a1', 'O', ALL_ON, true)
   expect(box(again, 'a1').routed).toEqual(box(o, 'a1').routed)
   expect(box(again, 'a1').routed?.ranOn).toBe('sonnet')
+})
+
+// ---- 0.11.0: nested spawns gated, resumes re-checked, workflow agents marked, boardFreeCheck ----
+
+const NESTED_TEXT_TAIL =
+  'Only the orchestrator declares units: finish your own task, and say in your answer what further work needs a worker.'
+
+test('spawnCheck: a nested spawn is held to a covering unit with its own refusal texts', () => {
+  const b = gateBoard()
+  expect(denyNested('n')).toBe(
+    `Spawn refused (policy §9): an agent started by another agent must carry out a unit the orchestrator declared, and no unit "n" with a tier, a kind and an audit line is declared. ${NESTED_TEXT_TAIL}`,
+  )
+  expect(denyNested(null)).toBe(
+    `Spawn refused (policy §9): an agent started by another agent must carry out a unit the orchestrator declared, and this call has no name and its description matches no unit's label. ${NESTED_TEXT_TAIL}`,
+  )
+  expect(denyBuiltinNested('Explore')).toBe(
+    'Spawn refused (policy §1): the built-in type "Explore" is not used under the Model Routing Policy, and only the orchestrator delegates. Finish your own task, and say in your answer what further work needs a worker.',
+  )
+  expect(spawnCheck(b, req({ name: 'n', nested: true }))).toBe(denyNested('n'))
+  expect(spawnCheck(b, req({ nested: true, description: 'Nothing matches this' }))).toBe(denyNested(null))
+  expect(spawnCheck(b, req({ name: '', nested: true }))).toBe(denyNested(null))
+  // no parked hint for a nested spawn; a unit with no audit line is not covering
+  expect(spawnCheck(b, req({ name: 'NA', nested: true }))).toBe(denyNested('NA'))
+  expect(spawnCheck(b, { subagentType: 'Explore', workerTier: null, nested: true })).toBe(denyBuiltinNested('Explore'))
+  expect(spawnCheck(b, { subagentType: 'general-purpose', workerTier: null, name: 'H', nested: true })).toBe(denyBuiltinNested('general-purpose'))
+  // a nested tier worker named for a covering unit with the right model passes, and the later checks run
+  expect(spawnCheck(b, req({ name: 'H', nested: true }))).toBeNull()
+  expect(spawnCheck(b, req({ name: 'H', nested: true, model: 'opus' }))).toBe(denyModelOverride('haiku', 'haiku', 'opus'))
+  expect(spawnCheck(b, req({ name: 'R', nested: true, subagentType: 'flowestra:sonnet-worker', workerTier: 'sonnet' }))).toBe(denyRejected('R'))
+  // the main-loop text is unchanged
+  expect(spawnCheck(b, req({ name: 'n' }))).toBe(denyUndeclared('n'))
+  expect(spawnCheck(b, { subagentType: 'Explore', workerTier: null })).toBe(denyBuiltin('Explore'))
+})
+
+test('spawnCheck: a workflow agent passes even with a refused built-in type, a nested fork is refused', () => {
+  const b = gateBoard()
+  expect(spawnCheck(b, { subagentType: 'Explore', workerTier: null, workflow: true })).toBeNull()
+  expect(spawnCheck(b, { subagentType: 'Explore', workerTier: null, workflow: true, nested: true })).toBeNull()
+  expect(spawnCheck(b, { subagentType: 'Explore', workerTier: null, fork: true, nested: true })).toBe(denyFork())
+})
+
+const resumeBoard = (extra: Partial<AgentBox> = {}, units: Unit[] = [tiered('O1', 'opus', { kind: 'design' })], tier: Tier = 'opus'): Board => {
+  const b = onBoard(units)
+  const x: AgentBox = {
+    ...mk('w1', 'done', T0, 'O1'),
+    model: tier === 'opus' ? OPUS : tier === 'sonnet' ? SONNET : HAIKU,
+    routed: { tier, kind: units[0]!.kind ?? 'locate', audit: auditFor(tier) },
+    ...extra,
+  }
+  return { ...b, ...withAgents(b, x) }
+}
+
+test('resumeCheck and spawnCheck: a resume of an unknown or unrouted agent passes', () => {
+  const b = resumeBoard()
+  expect(spawnCheck(b, req({ resume: true, resumeOf: 'nobody' }))).toBeNull()
+  expect(spawnCheck(b, req({ resume: true }))).toBeNull()
+  expect(spawnCheck(b, req({ resume: true, resumeOf: null }))).toBeNull()
+  const unrouted = resumeBoard({ routed: null, unitId: 'O1' }, [tiered('O1', 'opus', { kind: 'design', verdict: 'rejected' })])
+  expect(spawnCheck(unrouted, req({ resume: true, resumeOf: 'w1' }))).toBeNull()
+  expect(resumeCheck(unrouted, { resumeOf: 'w1' })).toBeNull()
+})
+
+test('resumeCheck: a rejected unit, a barred kind, a switched model and an unavailable tier', () => {
+  expect(denyResumeRejected('s1')).toBe('Spawn refused (policy §8): unit "s1" was rejected, so its worker is not resumed. Re-route the task upward under a new unit.')
+  const rejected = resumeBoard({}, [tiered('O1', 'opus', { kind: 'design', verdict: 'rejected' })])
+  expect(spawnCheck(rejected, req({ resume: true, resumeOf: 'w1' }))).toBe(denyResumeRejected('O1'))
+  // the unit missing from the list: the box's label stands in for the id when it has no unit link
+  const noUnit = resumeBoard({ unitId: null, label: 'Fix it' })
+  expect(resumeCheck(noUnit, { resumeOf: 'w1', models: { opus: 'sonnet', sonnet: 'sonnet', haiku: 'haiku' } })).toBe(
+    denyResumeSwitched('Fix it', 'opus', 'opus', 'sonnet'),
+  )
+  // a bar on (tier, kind) since it started
+  const sonnetUnits = [tiered('S1', 'sonnet', { kind: 'implement' })]
+  const barredB: Board = {
+    ...resumeBoard({ unitId: 'S1' }, sonnetUnits, 'sonnet'),
+    rejects: [
+      { unitId: 'x1', tier: 'sonnet', kind: 'implement', taskId: null },
+      { unitId: 'x2', tier: 'sonnet', kind: 'implement', taskId: null },
+    ] as unknown as Board['rejects'],
+  }
+  expect(barred(barredB)).toEqual([{ tier: 'sonnet', kind: 'implement', n: 2 }])
+  expect(spawnCheck(barredB, req({ resume: true, resumeOf: 'w1' }))).toBe(denyBarred('sonnet', 'implement', 2))
+  // Opus switched off: the box on an Opus model, routed opus
+  const o = resumeBoard()
+  const opusOff: WorkerModels = { opus: 'sonnet', sonnet: 'sonnet', haiku: 'haiku' }
+  expect(denyResumeSwitched('O1', 'opus', 'opus', 'sonnet')).toBe(
+    'Spawn refused: the worker of unit "O1" runs on Opus, but opus-tier work now runs on Sonnet (the Flowestra settings changed since it started). Spawn flowestra:opus-worker again for the unit, or re-route it.',
+  )
+  expect(spawnCheck(o, req({ resume: true, resumeOf: 'w1', models: opusOff }))).toBe(denyResumeSwitched('O1', 'opus', 'opus', 'sonnet'))
+  // Opus and Sonnet off: no model for the tier
+  const noOpus: WorkerModels = { opus: null, sonnet: null, haiku: 'haiku' }
+  expect(denyResumeUnavailable('O1', 'opus', noOpus)).toBe(
+    'Spawn refused: the worker of unit "O1" is not resumed: no worker model is on for opus-tier work now (the Flowestra settings switch off Opus and Sonnet). Do that work yourself, or ask the user to turn a worker model back on in /config.',
+  )
+  expect(spawnCheck(o, req({ resume: true, resumeOf: 'w1', models: noOpus }))).toBe(denyResumeUnavailable('O1', 'opus', noOpus))
+  // on its tier's model (all on, absent models, a model outside the tiers): passes, and no box is added
+  const before = JSON.stringify(o)
+  expect(spawnCheck(o, req({ resume: true, resumeOf: 'w1' }))).toBeNull()
+  expect(spawnCheck(o, req({ resume: true, resumeOf: 'w1', models: ALL_ON }))).toBeNull()
+  expect(resumeCheck({ ...o, agents: { w1: { ...o.agents['w1']!, model: 'claude-x' } } }, { resumeOf: 'w1', models: opusOff })).toBeNull()
+  expect(JSON.stringify(o)).toBe(before)
+  expect(Object.keys(o.agents)).toEqual(['w1'])
+  // not counted as a run: a unit that already ran twice at its tier still resumes
+  const twice = resumeBoard({}, [tiered('O1', 'opus', { kind: 'design' })])
+  const more = { ...twice, ...withAgents(twice, { ...mk('w2', 'done', T0, 'O1'), model: OPUS }, { ...mk('w3', 'done', T0, 'O1'), model: OPUS }) }
+  expect(spawnCheck(more, req({ resume: true, resumeOf: 'w1' }))).toBeNull()
+})
+
+test('boardFreeCheck: the refusals that need no board, and each is also refused by spawnCheck whatever the board holds', () => {
+  expect(denyUnavailableWorker('opus', { opus: null, sonnet: null, haiku: 'haiku' })).toBe(
+    'Spawn refused: no worker model is on for opus-tier work (the Flowestra settings switch off Opus and Sonnet). Do that work yourself, or ask the user to turn a worker model back on in /config.',
+  )
+  const opusOff: WorkerModels = { opus: 'sonnet', sonnet: 'sonnet', haiku: 'haiku' }
+  const noOpus: WorkerModels = { opus: null, sonnet: null, haiku: 'haiku' }
+  const opusReq = (over: Partial<SpawnRequest> = {}) => req({ subagentType: 'flowestra:opus-worker', workerTier: 'opus', ...over })
+  const cases: Array<[SpawnRequest, string | null]> = [
+    [req({ fork: true }), denyFork()],
+    [req({ fork: true, nested: true }), denyFork()],
+    [{ subagentType: 'statusline-setup', workerTier: null }, null],
+    [{ subagentType: 'Explore', workerTier: null }, denyBuiltin('Explore')],
+    [{ subagentType: 'Plan', workerTier: null, nested: true }, denyBuiltinNested('Plan')],
+    [opusReq({ model: 'opus', models: opusOff }), denyModelOverride('opus', 'sonnet', 'opus')],
+    [opusReq({ model: 'haiku' }), denyModelOverride('opus', 'opus', 'haiku')],
+    [opusReq({ models: noOpus }), denyUnavailableWorker('opus', noOpus)],
+    [opusReq({ model: 'opus', models: noOpus }), denyUnavailableWorker('opus', noOpus)],
+    // nothing to refuse without the board
+    [opusReq({ model: 'opus' }), null],
+    [opusReq({ model: 'sonnet', models: opusOff }), null],
+    [opusReq({ name: 'nope' }), null],
+    [{ subagentType: 'my:agent', workerTier: null, model: 'opus' }, null],
+    [req({ name: 'R' }), null],
+    // a workflow agent and a resume are not this check's
+    [{ subagentType: 'Explore', workerTier: null, workflow: true }, null],
+    [{ subagentType: 'Explore', workerTier: null, resume: true }, null],
+  ]
+  const withUnit: Board = { ...emptyBoard(T0), units: [tiered('O', 'opus', { kind: 'design' }), tiered('H')] }
+  const boards = [emptyBoard(T0), gateBoard(), withUnit]
+  for (const [r, want] of cases) {
+    expect(boardFreeCheck(r)).toBe(want)
+    if (want === null) continue
+    // containment: the full gate refuses it too, on an empty board and on a board with a covering unit
+    for (const b of boards) expect(spawnCheck(b, r)).not.toBeNull()
+    expect(spawnCheck(withUnit, { ...r, name: r.workerTier === 'opus' ? 'O' : 'H' })).not.toBeNull()
+  }
+})
+
+test('applySpawn with an ungated mark: no link to a unit even for a name equal to a unit id, and the mark is kept', () => {
+  const b0 = up(emptyBoard(T0), { taskId: 't1', units: [tiered('H1', 'haiku', { kind: 'locate' }), labelled(tiered('L1'), 'Find call sites')] })
+  const info = { agentId: 'w1', description: 'Find call sites', subagentType: 'workflow-subagent', model: HAIKU }
+  const linkedByName = applySpawn(b0, { ...info, name: 'H1', ungated: { why: 'workflow', run: 'wf_1' } }, T0)
+  expect(box(linkedByName, 'w1').unitId).toBeNull()
+  expect(box(linkedByName, 'w1').routed).toBeNull()
+  expect(box(linkedByName, 'w1').ungated).toEqual({ why: 'workflow', run: 'wf_1' })
+  // by label with no name
+  const byLabel = applySpawn(b0, { ...info, ungated: { why: 'workflow', run: 'wf_1' } }, T0)
+  expect(box(byLabel, 'w1').unitId).toBeNull()
+  expect(box(byLabel, 'w1').routed).toBeNull()
+  expect(auditIssue(byLabel, box(byLabel, 'w1'))).toBe('ungated')
+  // the same spawn without the mark links, routes and carries no mark
+  const gated = applySpawn(b0, { ...info, name: 'H1' }, T0)
+  expect(box(gated, 'w1').unitId).toBe('H1')
+  expect(box(gated, 'w1').routed?.tier).toBe('haiku')
+  expect(box(gated, 'w1').ungated).toBeNull()
+  expect(auditIssue(gated, box(gated, 'w1'))).toBe('none')
+})
+
+test('applySpawn without a mark sets ungated null over an unseen placeholder', () => {
+  let b = applyTurnStart(emptyBoard(T0), 'w1', T0)
+  expect(box(b, 'w1').ungated).toEqual({ why: 'unseen' })
+  b = applySpawn(b, { agentId: 'w1', description: 'Do the work', subagentType: 'flowestra:sonnet-worker', model: SONNET }, T0 + 1)
+  expect(box(b, 'w1').ungated).toBeNull()
+  expect(ungatedOf(box(b, 'w1'))).toBeNull()
+})
+
+test('a box made only by a step, a turn start, a tool call or reconcile is marked unseen; the main box is not', () => {
+  const unseen = { why: 'unseen' }
+  expect(box(applyStep(emptyBoard(T0), 'old1', usage(1, 2, 3, 4), T0), 'old1').ungated).toEqual(unseen)
+  expect(box(applyTurnStart(emptyBoard(T0), 'old2', T0), 'old2').ungated).toEqual(unseen)
+  expect(box(applyToolCall(emptyBoard(T0), 'old3', 'Read', T0), 'old3').ungated).toEqual(unseen)
+  expect(box(applyComplete(emptyBoard(T0), 'old4', { reason: 'answer' }, T0), 'old4').ungated).toEqual(unseen)
+  const listed = reconcile(emptyBoard(T0), [{ id: 'l1', description: 'A forked skill', type: 'general-purpose', status: 'running' }], T0)
+  expect(box(listed, 'l1').ungated).toEqual(unseen)
+  expect(auditIssue(listed, box(listed, 'l1'))).toBe('ungated')
+  // an existing box is not re-marked by reconcile or a later event
+  const known = applySpawn(emptyBoard(T0), { agentId: 'k', description: 'Do it', subagentType: 'flowestra:haiku-worker', model: HAIKU }, T0)
+  expect(box(reconcile(known, [{ id: 'k', description: 'Do it', type: 'flowestra:haiku-worker', status: 'running' }], T0 + 1), 'k').ungated).toBeNull()
+  expect(box(applyStep(known, 'k', usage(1, 1, 1, 1), T0 + 1), 'k').ungated).toBeNull()
+  // the main box carries no mark
+  for (const b of [applyTurnStart(emptyBoard(T0), undefined, T0), applyStep(emptyBoard(T0), undefined, null, T0), applyToolCall(emptyBoard(T0), undefined, 'Read', T0)]) {
+    expect(box(b, MAIN_ID).ungated).toBeUndefined()
+    expect(auditIssue(b, box(b, MAIN_ID))).toBe('none')
+  }
+})
+
+test('auditIssue: a marked box is ungated, read before routed; an unmarked or absent mark reads as before', () => {
+  const b = onBoard([tiered('H')])
+  const routedHaiku = { tier: 'haiku' as const, kind: 'locate' as const, audit: auditFor('haiku') }
+  const x = { ...withModel(mk('x', 'running', null, 'H'), HAIKU), routed: routedHaiku }
+  expect(auditIssue(b, x)).toBe('none')
+  expect(auditIssue(b, { ...x, ungated: null })).toBe('none')
+  expect(auditIssue(b, { ...x, ungated: { why: 'exempt' } })).toBe('ungated')
+  expect(auditIssue(b, { ...mk('y', 'running'), ungated: { why: 'resumed' } })).toBe('ungated')
+  expect(auditIssue(b, mk('y', 'running'))).toBe('no-audit')
+  expect(ungatedOf({ ...x, ungated: { why: 'workflow', run: 'wf_1' } })).toEqual({ why: 'workflow', run: 'wf_1' })
+  expect(ungatedOf(x)).toBeNull()
+})
+
+const marked = (b: AgentBox, why: 'workflow' | 'resumed' | 'nested' | 'exempt' | 'unseen'): AgentBox => ({
+  ...b,
+  ungated: why === 'workflow' ? { why, run: 'wf_1' } : { why },
+})
+
+test('a box the gate let through without a unit is never linked by applyUnits; an unseen one is', () => {
+  const units = [labelled(unit('s1'), 'Do s1')]
+  for (const why of ['workflow', 'resumed', 'nested', 'exempt'] as const) {
+    const byLabel = marked({ ...mk('a', 'running'), label: 'Do s1' }, why)
+    const after = up(withBoxes(byLabel), { units })
+    expect(box(after, 'a').unitId).toBeNull()
+    const byName = marked({ ...mk('b', 'running'), name: 's1' }, why)
+    expect(box(up(withBoxes(byName), { units }), 'b').unitId).toBeNull()
+  }
+  const unseen = marked({ ...mk('c', 'running'), label: 'Do s1' }, 'unseen')
+  expect(box(up(withBoxes(unseen), { units }), 'c').unitId).toBe('s1')
+  const unseenByName = marked({ ...mk('d', 'running'), name: 's1' }, 'unseen')
+  expect(box(up(withBoxes(unseenByName), { units }), 'd').unitId).toBe('s1')
+})
+
+test('reconcile does not link an existing workflow-marked box to a unit; it links an unseen one', () => {
+  const b0: Board = { ...withBoxes(marked({ ...mk('w', 'running'), label: 'Do s1' }, 'workflow'), marked({ ...mk('u', 'running'), label: 'Do s1' }, 'unseen')), units: [labelled(unit('s1'), 'Do s1')] }
+  const after = reconcile(
+    b0,
+    [
+      { id: 'w', description: 'Do s1', type: 'general-purpose', status: 'running', name: 's1' },
+      { id: 'u', description: 'Do s1', type: 'general-purpose', status: 'running', name: 's1' },
+    ],
+    T0 + 1,
+  )
+  expect(box(after, 'w').unitId).toBeNull()
+  expect(box(after, 'u').unitId).toBe('s1')
+  for (const why of ['resumed', 'nested', 'exempt'] as const) {
+    const b1: Board = { ...withBoxes(marked(mk('x', 'running'), why)), units: [unit('s1')] }
+    const r = reconcile(b1, [{ id: 'x', description: 'd', type: 't', status: 'running', name: 's1' }], T0 + 1)
+    expect(box(r, 'x').unitId).toBeNull()
+  }
+})
+
+test('a workflow box of a unit\'s label does not count as a run of that unit for the retry rule', () => {
+  const b = gateBoard()
+  const real = withModel(mk('a1', 'done', T0, 'H'), HAIKU)
+  const wf = marked({ ...withModel(mk('wf', 'done', T0), HAIKU), label: 'Find call sites' }, 'workflow')
+  const board: Board = { ...b, ...withAgents(b, real, wf) }
+  const after = up(board, { units: board.units })
+  expect(box(after, 'wf').unitId).toBeNull()
+  const second: Board = { ...after, ...withAgents(after, withModel(mk('a2', 'done', T0, 'H'), HAIKU)) }
+  // two real runs would refuse; one real run plus the workflow box does not
+  expect(spawnCheck(after, req({ name: 'H' }))).toBeNull()
+  expect(spawnCheck(second, req({ name: 'H' }))).toBe(denyRetry('H', 'haiku'))
 })

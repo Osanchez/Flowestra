@@ -122,6 +122,23 @@ export function entryName(spawnedMs: number, unitId: string, agentId: string): s
   return `${stamp}-${unitId}-${agentId.slice(0, 8)}`
 }
 
+/**
+ * An entry file's name back to its parts: `<yyyymmdd>-<hhmmss>-<unit id>-<agent8>.md`, that is
+ * 15 fixed characters, `-`, the unit id (which may itself hold `-`), `-`, the last 8 characters
+ * before `.md`. Null for part files (`*.result.md`, `*.result.<n>.md`), `index.md`, `state.md`
+ * and anything too short or shaped otherwise.
+ */
+export function parseEntryFileName(name: string): { unitId: string; agent8: string } | null {
+  if (!name.endsWith('.md') || /\.result(?:\.\d+)?\.md$/.test(name)) return null
+  const base = name.slice(0, -3)
+  if (base.length < 15 + 1 + 1 + 1 + 8) return null
+  if (!/^\d{8}-\d{6}-/.test(base)) return null
+  if (base[base.length - 9] !== '-') return null
+  const unitId = base.slice(16, base.length - 9)
+  if (unitId === '') return null
+  return { unitId, agent8: base.slice(base.length - 8) }
+}
+
 /** `<root>/index.md` */
 export function rootIndexPath(root: string): string {
   return joinPath(root, 'index.md')
@@ -145,6 +162,16 @@ export function stateMdPath(root: string, key: string, taskId: string): string {
 }
 export function stateJsonPath(root: string, key: string, taskId: string): string {
   return joinPath(root, key, taskId, 'state.json')
+}
+/** The backup copy of a task's state.json, same text: `<task>/state.bak.json`. */
+export function stateBakPath(root: string, key: string, taskId: string): string {
+  return joinPath(root, key, taskId, 'state.bak.json')
+}
+/** Where an unreadable state text is kept: `<task>/state.unreadable-<yyyymmdd-hhmmss>.json`, the time in UTC. */
+export function stateUnreadablePath(root: string, key: string, taskId: string, atMs: number): string {
+  const iso = isoOf(atMs)
+  const stamp = `${iso.slice(0, 4)}${iso.slice(5, 7)}${iso.slice(8, 10)}-${iso.slice(11, 13)}${iso.slice(14, 16)}${iso.slice(17, 19)}`
+  return joinPath(root, key, taskId, `state.unreadable-${stamp}.json`)
 }
 /** `<root>/<repo-key>/<task-id>/<phase>` */
 export function phaseDir(root: string, key: string, taskId: string, phase: string): string {
@@ -373,6 +400,34 @@ export function phaseIndexLine(l: PhaseLine): string {
     ],
     [8, 1],
   )
+}
+
+/** The phase index line of an entry's data, for the entry file `file`. */
+export function phaseLineOfData(file: string, d: EntryData): string {
+  const results = [d.result, ...d.resumes.map(r => r.result)].filter((r): r is string => r !== null)
+  return phaseIndexLine({
+    file,
+    unitId: d.unitId,
+    tier: d.tier,
+    kind: d.kind,
+    status: d.status,
+    verdict: d.verdict,
+    briefChars: d.brief.length,
+    resultChars: results.length === 0 ? null : results.reduce((n, r) => n + r.length, 0),
+    audit: d.audit,
+  })
+}
+
+/** A phase index line's verdict counts and entries, as the task index line for that phase. */
+export function taskLineOf(phase: string, phaseLines: readonly string[], atMs: number): string {
+  let accepted = 0
+  let rejected = 0
+  for (const l of phaseLines) {
+    const v = l.split(' | ')[5]
+    if (v === 'accepted') accepted += 1
+    else if (v === 'rejected') rejected += 1
+  }
+  return taskIndexLine({ phase, entries: phaseLines.length, accepted, rejected, unchecked: phaseLines.length - accepted - rejected, updatedMs: atMs })
 }
 
 /**
@@ -691,4 +746,74 @@ export function withContext(prompt: string, items: readonly ResolvedContext[]): 
     blocks.push(block)
   }
   return { prompt: `${prompt}\n\n${blocks.join('\n\n')}`, status }
+}
+
+// ---------------------------------------------------------------- 7. entry text back to data
+
+export const CONTEXT_STATUS = /(.+?) \((inlined \d+ chars|cut at \d+ of \d+|path only)\)(?:, |$)/g
+
+/** An entry file's text (results already joined) back to its data; null when it is not one. Exported for its test. */
+export function entryFromText(text: string): EntryData | null {
+  const lines = text.replace(/\n$/, '').split('\n')
+  const head = (re: RegExp) => {
+    for (const l of lines.slice(0, 9)) {
+      const m = re.exec(l)
+      if (m !== null) return m
+    }
+    return null
+  }
+  const dash = (v: string | undefined) => (v === undefined || v === '-' ? null : v)
+  const title = /^# (.+?) · (.+?) · (.*)$/.exec(lines[0] ?? '')
+  const audit = head(/^audit: (.*)$/)
+  const tier = head(/^tier: (.+?) · kind: (.+?) · phase: (.+?) · wave: (.+)$/)
+  const agent = head(/^agent: (.+?) · type: (.+?) · model: (.+?) · session: (.+)$/)
+  const cwd = head(/^cwd: (.*?) · context: (.*)$/)
+  const times = head(/^spawned: (\S+) · ended: (\S+) · status: (\w+)$/)
+  const verdict = head(/^verdict: (\w+)(?: · at (\S+))?$/)
+  if (!title || !audit || !tier || !agent || !cwd || !times || !verdict) return null
+  const context: ContextStatus[] = []
+  if (cwd[2] !== 'none') for (const m of (cwd[2] ?? '').matchAll(CONTEXT_STATUS)) context.push({ item: m[1] ?? '', status: m[2] ?? '' })
+  const brief = lines.indexOf('## Brief')
+  if (brief < 0) return null
+  const sections: { head: string; body: string[] }[] = []
+  for (let i = brief; i < lines.length; i++) {
+    const l = lines[i] ?? ''
+    if (/^## (Brief|Result|Message \d+|Result \d+)$/.test(l)) sections.push({ head: l, body: [] })
+    else sections[sections.length - 1]?.body.push(l)
+  }
+  const bodyOf = (h: string) => {
+    const body = sections.find(s => s.head === h)?.body.join('\n')
+    return body === undefined ? null : unescapeSections(body)
+  }
+  const resumes: EntryData['resumes'] = []
+  for (let n = 2; bodyOf(`## Message ${n}`) !== null; n++) resumes.push({ message: bodyOf(`## Message ${n}`) ?? '', result: bodyOf(`## Result ${n}`) || null })
+  const statuses: EntryStatus[] = ['running', 'done', 'failed', 'stopped']
+  const status = statuses.find(s => s === times[3]) ?? 'running'
+  const v = verdict[1] === 'accepted' || verdict[1] === 'rejected' ? (verdict[1] as Verdict) : null
+  const phase = dash(tier[3])
+  const wave = Number(tier[4])
+  return {
+    taskId: title[1] ?? '',
+    unitId: title[2] ?? '',
+    label: title[3] ?? '',
+    audit: dash(audit[1]),
+    tier: (dash(tier[1]) as EntryData['tier']) ?? null,
+    kind: (dash(tier[2]) as EntryData['kind']) ?? null,
+    phase: phase === null || phase === 'unset' ? null : (phase as EntryData['phase']),
+    wave: Number.isFinite(wave) ? wave : null,
+    agentId: agent[1] ?? '',
+    subagentType: dash(agent[2]),
+    model: dash(agent[3]),
+    sessionId: agent[4] ?? '',
+    cwd: dash(cwd[1]),
+    context,
+    spawnedMs: Date.parse(times[1] ?? '') || 0,
+    endedMs: times[2] === 'running' ? null : Date.parse(times[2] ?? '') || null,
+    status,
+    verdict: v,
+    verdictMs: verdict[2] ? Date.parse(verdict[2]) || null : null,
+    brief: bodyOf('## Brief') ?? '',
+    result: bodyOf('## Result') || null,
+    resumes,
+  }
 }

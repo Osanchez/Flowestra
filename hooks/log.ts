@@ -11,7 +11,8 @@
 // register.tsx compares the board before and after each write and pushes what changed.
 
 import type { AgentBox, Board, BoxStatus, Log, LogEntry, Tier } from '../types'
-import { MAIN_ID, auditIssue, barred, fedUnits, formatDuration, isPlaceholder, prettyModel, runTier, unitOf, withdrawn } from './state'
+import { ungatedDetail } from './gate'
+import { MAIN_ID, auditIssue, barred, fedUnits, formatDuration, isPlaceholder, prettyModel, runTier, ungatedOf, unitOf, withdrawn } from './state'
 
 // Change the tag when Log's fields change (see BOARD_SHAPE in state.ts).
 // 0.5.0 only widened LogKind ('audit', 'verdict'): the fields are the same, so the tag stays.
@@ -76,12 +77,12 @@ function endedEntry(board: Board, box: AgentBox, at: number): LogEntry | null {
   }
 }
 
-type AuditState = 'none' | 'no-audit' | 'tier-mismatch' | 'audited'
+type AuditState = 'none' | 'no-audit' | 'tier-mismatch' | 'ungated' | 'audited'
 
 /**
  * 'none' when the box is absent or still a placeholder (known only by its id);
  * otherwise what is wrong with its routing on `board` ('no-audit',
- * 'tier-mismatch'), or 'audited' when nothing is.
+ * 'tier-mismatch', 'ungated': a box the gate did not hold to a unit), or 'audited' when nothing is.
  */
 function auditState(board: Board, box: AgentBox | undefined): AuditState {
   if (box === undefined || isPlaceholder(box)) return 'none'
@@ -93,6 +94,13 @@ function auditEntry(before: Board, after: Board, prev: AgentBox | undefined, box
   const was = auditState(before, prev)
   const is = auditState(after, box)
   if (is === was) return null
+  if (is === 'ungated') {
+    const mark = ungatedOf(box)
+    if (mark === null) return null
+    // One entry per workflow run: a box of the same run already on `before` made it.
+    if (mark.why === 'workflow' && mark.run !== undefined && boxesOf(before).some(b => b.id !== box.id && ungatedOf(b)?.why === 'workflow' && ungatedOf(b)?.run === mark.run)) return null
+    return { at, kind: 'audit', who: box.label, text: `ungated: ${ungatedDetail(mark, box.type)}` }
+  }
   if (is === 'audited') {
     return { at, kind: 'audit', who: box.label, text: unitOf(after, box)?.audit ?? '' }
   }
@@ -116,7 +124,10 @@ function auditEntry(before: Board, after: Board, prev: AgentBox | undefined, box
  * placeholder known only by its id on `before`; a placeholder appearing makes
  * none); its audit entry, a placeholder counting as no audit state so the
  * entry carries the real label: becoming audited (the unit's audit line),
- * first showing with no audit line ("no audit line (policy §9)"), becoming a
+ * first showing with no audit line ("no audit line (policy §9)"), first showing
+ * with an ungated mark ("ungated: workflow run wf_1: its agents start
+ * unchecked"; one entry per workflow run; a marked box never gets the no-audit
+ * entry), becoming a
  * tier mismatch ("ran on Haiku 5.5, unit says sonnet"); its end (done, with
  * " · draft" for a Sonnet worker; failed; stopped). Then each unit with a tier
  * whose verdict changed to a set one ("accepted → feeds A, B", "accepted",

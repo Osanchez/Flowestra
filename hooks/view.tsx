@@ -14,7 +14,8 @@
 
 import type { BoxProps, ButtonProps, ElementConstructor, RenderElement, TextProps, ThemeKey } from 'claude-code'
 
-import type { AgentBox, Board, BoxStatus, Detail, FlowProps, Log, LogKind, Row, RowCard, RowCardStatus, Tier, Tokens, Ui, Unit } from '../types'
+import type { AgentBox, Board, GateHealth, BoxStatus, Detail, FlowProps, Log, LogKind, Row, RowCard, RowCardStatus, Tier, Tokens, Ui, Unit } from '../types'
+import { gateBandPart, gateStatusValue, isDegraded, UNGATED_SHORT } from './gate'
 import { auditParts } from './policy'
 import {
   auditIssue,
@@ -36,6 +37,7 @@ import {
   slotOf,
   tally,
   unitOf,
+  ungatedOf,
 } from './state'
 
 export { formatDuration, shortModel }
@@ -61,6 +63,7 @@ export type ViewModel = {
   ui: Ui // the card whose detail strip is open
   log: Log // the session log, oldest first
   onSelect: (id: string) => void // a press on a card (still fallback row only)
+  gate?: GateHealth // the spawn gate's health (0.11.0); absent or healthy draws as before
 }
 
 /** The part of a surface's element table the view uses: present on every surface. */
@@ -310,13 +313,15 @@ function cardOf(vm: ViewModel, box: AgentBox): RowCard {
   const { board } = vm
   const status = cardStatus(vm, box)
   const other = otherTaskOf(board, box)
-  const issue = other !== null ? 'none' : auditIssue(board, box)
+  const mark = ungatedOf(box)
+  const issue = mark === null && other !== null ? 'none' : auditIssue(board, box)
   const unit = unitOf(board, box)
   const name = prettyModel(box.model)
   const kind = unit !== null ? unit.kind : (box.routed?.kind ?? null)
   const tier = unit?.tier ?? box.routed?.tier ?? null
   let model = name
-  if (other !== null) model = `${name} · ⇄ ${other}`
+  if (mark !== null) model = `${name} · ungated: ${UNGATED_SHORT[mark.why]}`
+  else if (other !== null) model = `${name} · ⇄ ${other}`
   else if (issue === 'no-audit') model = `${name} · no audit`
   else if (issue === 'tier-mismatch' && tier !== null) model = `${name} · not ${box.routed?.ranOn ?? tier}`
   else if (kind !== null && kind !== undefined) {
@@ -594,6 +599,12 @@ function tierLines(board: Board, box: AgentBox, inner: number): DrawerLine[] {
   const out: DrawerLine[] = []
   const unit = unitOf(board, box)
   const issue = auditIssue(board, box)
+  const mark = ungatedOf(box)
+  if (mark !== null) {
+    out.push({ text: `ungated (${mark.why}): no unit, tier or audit line was checked`, color: 'warning' })
+    if (mark.why === 'workflow' && mark.run) out.push({ text: cut(`run: ${mark.run}`, inner) })
+    return out
+  }
   if (issue === 'no-audit') {
     out.push({ text: 'no audit line (policy §9)', color: 'warning' })
   } else if (issue === 'tier-mismatch' && unit !== null) {
@@ -842,16 +853,17 @@ function drawCompactLog(el: El, vm: ViewModel, count: number): RenderElement {
 // ---------------------------------------------------------------- the status line and notes
 
 /** The status line's parts: label (dim) and value (normal), in order. */
-export function statusParts(vm: ViewModel): Array<{ label: string; value: string }> {
+export function statusParts(vm: ViewModel): Array<{ label: string; value: string; warn?: boolean }> {
   const { board } = vm
   const workers = rowBoxes(board, 'workers')
   const leads = rowBoxes(board, 'leads')
-  const parts = [
+  const parts: Array<{ label: string; value: string; warn?: boolean }> = [
     { label: 'lead', value: leadState(vm).running ? 'working' : 'waiting' },
     { label: 'workers', value: `${workers.filter(isRunning).length}/${workers.length}` },
   ]
   if (leads.length > 0) parts.push({ label: 'leads', value: `${leads.filter(isRunning).length}/${leads.length}` })
   parts.push({ label: 'phase', value: board.phase ?? 'not set' })
+  if (vm.gate && isDegraded(vm.gate)) parts.unshift({ label: 'gate', value: gateStatusValue(vm.gate), warn: true })
   return parts
 }
 
@@ -863,7 +875,7 @@ function drawStatus(el: El, vm: ViewModel): RenderElement {
         {statusParts(vm).map((p, i) => (
           <Text>
             <Text dimColor>{`${i > 0 ? '   ' : ''}${p.label} `}</Text>
-            {`[${p.value}]`}
+            {p.warn ? <Text color="warning">{`[${p.value}]`}</Text> : `[${p.value}]`}
           </Text>
         ))}
       </Text>
@@ -975,7 +987,8 @@ export function bandText(vm: ViewModel): string {
     board.phase === null ? 'phase not set' : `[${board.phase}${board.phase === 'executing' && board.wave !== null ? ` · wave ${board.wave}` : ''}]`
   const sum = sumTokens(board)
   const t = tokenParts(sum.tokens, sum.isPartial)
-  return `Agent Board  ${board.taskId === null ? '' : `${board.taskId}  `}${phase}  ● ${running}/${workers.length} running  new ${t.new}  cached ${t.cached}  out ${t.out}  · /board to open`
+  const gate = vm.gate && isDegraded(vm.gate) ? `${gateBandPart(vm.gate)}  ` : ''
+  return `Agent Board  ${gate}${board.taskId === null ? '' : `${board.taskId}  `}${phase}  ● ${running}/${workers.length} running  new ${t.new}  cached ${t.cached}  out ${t.out}  · /board to open`
 }
 
 /** The one-line fallback row above the prompt (spec 2.9). */

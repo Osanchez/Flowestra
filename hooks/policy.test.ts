@@ -183,6 +183,17 @@ describe('the policy section', () => {
     expect(ROUTING_BOARD_NOTE.endsWith(sentences[3] ?? '')).toBe(true)
     expect(ROUTING_BOARD_NOTE.includes('\n')).toBe(false)
   })
+  test('the board note holds the gate-exceptions sentence right after the fork sentence, and the rest is unchanged', () => {
+    const sentence = 'Agents that other agents start are held to the same units, named in the call; a resumed worker (a message to a finished one) is refused when its unit was rejected, its kind is barred at its tier, or its tier\'s model has changed since it started. Workflow agents, skills that run in their own agent and agents the board did not see start are not checked: the board marks them ungated. When the board\'s answer says the gate is degraded, a check failed with an error: tell the user.'
+    const fork = 'with no tier and no audit line.'
+    expect(ROUTING_BOARD_NOTE).toContain(`${fork} ${sentence} A unit may also name context,`)
+    expect(ROUTING_BOARD_NOTE.split(sentence).length).toBe(2)
+    const without = ROUTING_BOARD_NOTE.replace(` ${sentence}`, '')
+    expect(without).toContain(`${fork} A unit may also name context,`)
+    expect(without).toContain('A unit you carry out yourself has no tier: give it declared (pending, done or failed).')
+    expect(without).toContain('A call that no such unit covers is refused')
+    expect(without.endsWith('which is for reading with judgment, not for quoting.')).toBe(true)
+  })
   test('nothing of the old policy remains', () => {
     expect(ROUTING_POLICY_SECTION.text.toLowerCase()).not.toContain(OLD_WORD)
     expect(ROUTING_POLICY_SECTION.text).not.toContain(OLD_POLICY)

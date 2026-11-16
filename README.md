@@ -36,10 +36,22 @@ Each tier's model can be switched off (see "Choose worker models" below); the ti
 
 - the built-in agent types the tier workers replace (`Explore`, `Plan`, `general-purpose`, `claude`, `web-fetch`, `claude-code-guide`);
 - forks, which would copy the whole conversation and run on the orchestrator's own model with no tier and no audit line;
+- an agent started by another agent that no declared unit covers, and a built-in type started by another agent;
 - a worker for a unit that was rejected, a third run of one unit at the same tier, and a task type barred at a tier after two rejections in a session;
+- a resumed worker (a message sent to a finished one) whose unit was rejected, whose task type has since been barred at its tier, or whose tier's model has been switched off since it started;
 - a worker whose unit names a spec file or a context item that does not exist.
 
-The gate fails open: if the board cannot read its own state, the worker starts.
+**When the gate itself fails.** A check that fails with an error does not block the session: by default the spawn starts unchecked. The refusals that need no board state (forks, the replaced built-in types, a model a worker may not run on) are still made. Each failure is shown: the board's status line reads `gate [degraded · 2 failed]` until the mod loads again, the session log and the audit file record it, and the orchestrator is told in the board's answer. To refuse spawns instead while the gate cannot check them, set "When the gate fails" to `refuse` in `/config`; a fault in the mod then stops all delegation until it is fixed.
+
+**What the gate does not check.** The gate sees an agent when Claude Code asks the mod before starting it. These agents run with no unit, no tier check and no audit line; each is marked on its card (`ungated: …`), in the session log, in the board's answer and, except the unseen ones, in the audit file:
+
+- **Workflow agents.** The agents a Workflow script starts. They run on the model the script names, or on the main session's model when it names none. The Workflow tool is used only when you ask for it.
+- **Skills that run in their own agent** (`context: fork` in the skill). Claude Code starts these without asking any mod, so the gate cannot refuse them; the board shows the agent once it appears, marked `unseen`. Agents that such an agent starts are checked.
+- **Agents started before the board loaded**, for example when the mod is turned on mid-session: also `unseen`.
+- **`statusline-setup`**, the settings utility behind `/statusline`: exempt.
+- **A resumed agent that no unit covered**, such as one of the above.
+
+A resumed tier worker is checked again (above) and is not counted as another run. Agents started by other agents are held to the same rules as the orchestrator's: a declared unit, named in the call.
 
 **Context instead of forks.** A unit can name up to eight things its worker needs from earlier work: a file (optionally one `#heading` of it) or an earlier unit's journal entry. The mod places their text in the worker's brief, so the worker never needs the orchestrator's conversation. When a task works in another repository, the worker runs in that repository's folder and is given its `CLAUDE.md`.
 
@@ -55,6 +67,8 @@ The gate fails open: if the board cannot read its own state, the worker starts.
 ```
 
 The mod writes it mechanically from what it sees; no model writes summaries for it. Index lines are capped at 160 characters, so the indexes stay small however long the work runs, and several sessions can write to the same journal at once.
+
+**What it holds.** The journal stores every brief and every result in plain text files under your Claude Code config folder. Whatever a brief or a result contains is in it: source code, file contents, command output, and any credential or private text that passed through them. The mod sends none of it anywhere; a journal entry you name as a unit's context is placed in that worker's brief, which goes to the model like any prompt. With "Mask secrets in the journal" on (the default), text that looks like a known kind of credential is replaced by `[redacted:<kind>]` before it is written. This is best effort: a secret in any other form is stored as written. Masking covers briefs, messages and results; the one-line routing reason the orchestrator writes for each unit is stored as written. "Journal content" can keep only the head and tail of each brief and result, or none of them. Nothing is ever deleted on its own: the only way to delete is `/journal prune`, confirmed by your own typed command, and it removes only the mod's own journal and audit files under your Claude Code config folder. Deleting does not remove copies in backups of your home folder. Treat the folder like your shell history: do not commit, sync or share it.
 
 ## Install
 
@@ -75,6 +89,8 @@ claude plugin install flowestra --marketplace Osanchez/Flowestra
 In the desktop app: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `Osanchez/Flowestra`, then **Add plugin**.
 
 The pane opens by itself when workers start. `/board` opens or closes it.
+
+`/journal` shows the journal's size and settings. `/journal prune <days>` shows which closed tasks and audit files are that old and what deleting them would free; nothing is deleted until you type the confirmation it prints, which only works when you type it yourself. Open tasks are kept; one you abandoned can be deleted by name with `/journal prune task <repo>/<task>`. `/journal check` finds entries missing from the indexes, restores damaged task state files from their backup, and rebuilds the indexes. It deletes only task folders and audit files inside the mod's own `flowestra` folder in your Claude Code config folder, never anything in a project, and where it cannot delete (outside the terminal, or on Windows) it lists the folders for you to remove.
 
 **Requirements.** A Claude Code build that supports mods (plugins with a hooks module). Flowestra was built and tested on Claude Code 2.1.325, with an account that can use the worker models you leave switched on (Opus, Sonnet and Haiku by default).
 
@@ -104,9 +120,12 @@ Installing the mod gives the main session the routing policy, the workers, the g
    | 0 | 0 | 0 | refused | refused | refused |
 
    When no model is on for a tier, work routed to it is refused and the orchestrator does it itself or asks you. A change applies from the next session.
-3. **Approved designs go to `.flowestra/decisions.md`** (`full` only). Each approved design is a dated entry in that file at the project root, and worker briefs point at that entry. Commit the folder or add it to `.gitignore`, as you prefer.
-4. **Add project constraints, if any.** A project's `CLAUDE.md` can list resources its work shares (one test database, one device, one editor) and can send a kind of work to a higher tier than the policy would. It should never send work to a lower one: the policy is the only source of routing rules.
-5. **Start working.** Ask for something that needs more than one step. The orchestrator opens a task, declares its units and spawns workers, and the board shows them.
+
+   "When the gate fails" (allow by default): refuse blocks a spawn the gate could not check instead of letting it start unchecked.
+3. **Choose what the journal keeps.** Open `/config` and set "Mask secrets in the journal" (on by default) and "Journal content" (`full` by default, or `capped`, or `index`). A change applies from the next session. Nothing is deleted automatically; see `/journal` below.
+4. **Approved designs go to `.flowestra/decisions.md`** (`full` only). Each approved design is a dated entry in that file at the project root, and worker briefs point at that entry. Commit the folder or add it to `.gitignore`, as you prefer.
+5. **Add project constraints, if any.** A project's `CLAUDE.md` can list resources its work shares (one test database, one device, one editor) and can send a kind of work to a higher tier than the policy would. It should never send work to a lower one: the policy is the only source of routing rules.
+6. **Start working.** Ask for something that needs more than one step. The orchestrator opens a task, declares its units and spawns workers, and the board shows them.
 
 What a declaration looks like, through the `AgentBoard` tool the mod registers:
 
@@ -186,15 +205,19 @@ Flowestra keeps its files under Claude Code's config folder: the `CLAUDE_CONFIG_
 | Path | What |
 |---|---|
 | `<config>/flowestra/journal/` | The work journal |
-| `<config>/flowestra/audit/<session id>.log` | One line per delegation that started in that session |
+| `<config>/flowestra/audit/<session id>.log` | One line per delegation that started in that session, one per agent that started ungated (`!ungated`), and one per gate failure (`!gate-error`) |
+| `<config>/flowestra/prune.log` | One line per task or audit file deleted from the journal: names and sizes, never content |
 
 The board's answer to opening or switching a task states both paths.
 
+Each task folder also holds state.bak.json, a backup of its state file. The workflow may ask workers to write design drafts under <config>/flowestra/drafts; the mod does not write or delete that folder.
+
 ## Things to know
 
-- **Briefs and results are stored in full**, in plain text, on your machine. Nothing leaves it, but the journal holds whatever your briefs and results contain. There is no pruning yet.
-- **The built-in agent types listed above are unavailable** to the main session while the mod is loaded. Skills that start their own agents may be refused by the gate.
-- **Workflow agents, resumed agents and agents started by other agents** are not checked by the gate.
+- **Briefs and results are stored in plain text** on your machine (see "What it holds" above). Masking is best effort. Nothing is deleted unless you run `/journal prune` and confirm it yourself.
+- **The built-in agent types listed above are unavailable** while the mod is loaded, to the main session and to every agent it starts. A skill that starts agents through the Agent tool is refused unless a unit covers each one; a skill that runs in its own agent is not checked (see "What the gate does not check").
+- **The gate governs agent starts, not everything a session does.** It checks the agents Claude Code tells mods about; the exceptions above are shown, not refused, and a fault in the mod lets spawns through unchecked unless "When the gate fails" is set to refuse. Every such case is on the board and in the audit file.
+- **Other mods that start agents of their own** go through the same gate, and are refused unless a unit covers them.
 - **The mod is generic.** It contains nothing specific to any project.
 
 ## Development
@@ -204,7 +227,7 @@ claude plugin test <folder>       # runs every *.test.ts
 claude plugin validate <folder>   # reads the manifest and type-checks the module
 ```
 
-The module is `hooks/register.tsx`; everything else under `hooks/` is pure and tested on its own: `policy.ts` (the policy text), `workflow.ts` (the workflow text and the `workflow` setting), `workers.ts` (the three worker types), `models.ts` (the worker model settings and their cascade), `board.ts` (the tool's parser), `state.ts` (the board's reducers and the gate), `journal.ts` (the journal's formats), `log.ts`, `view.tsx` and `flow.client.tsx` (the drawing), `guard.ts` (the fail-open helper).
+The module is `hooks/register.tsx`; everything else under `hooks/` is pure and tested on its own: `policy.ts` (the policy text), `workflow.ts` (the workflow text and the `workflow` setting), `workers.ts` (the three worker types), `models.ts` (the worker model settings and their cascade), `board.ts` (the tool's parser), `state.ts` (the board's reducers and the gate), `journal.ts` (the journal's formats), `log.ts`, `view.tsx` and `flow.client.tsx` (the drawing), `gate.ts` (the gate's health and texts), `redact.ts` (masking and storing less), `prune.ts` (what `/journal` may delete and every text it prints), `journal-fs.ts` (the journal's file layer), `upkeep.ts` (`/journal`), `guard.ts` (the guarded-check helpers).
 
 ## License
 

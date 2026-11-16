@@ -22,11 +22,27 @@ export type AgentBox = {
   flow: { dir: 'out' | 'in' | null; at: number | null }   // last transfer, for the arrow highlight
   taskId: string | null      // the task (workstream) it was spawned under; null: none was open
   routed: Routed | null      // what its covering unit said when it started; null: no unit covered it
+  ungated?: UngatedMark | null // null: the gate held it to a unit or refused nothing it should have; absent: stored before 0.11 (read as null)
 }
 // A delegation's routing, recorded on the agent at spawn (0.7.0), so a box stays
 // audited after its unit leaves the list, its task is switched away from, or closed.
 // `ranOn`: the tier whose model the settings assigned to this tier at spawn; absent means the tier itself.
 export type Routed = { tier: Tier; kind: TaskKind; audit: string; ranOn?: Tier }
+
+// Gate health (0.11.0): failures of the spawn gate's checks since the mod last loaded.
+export type GateCheck = 'spawn check' | 'spec check' | 'context check' | 'fork check' | 'spawn hook'
+export type GateRecord = 'spawn bookkeeping' | 'audit file'
+export type GateOutcome = 'started unchecked' | 'refused (strict)' | 'refused (fallback check)' | 'recorded only'
+export type GateFault = { where: GateCheck | GateRecord; at: number; error: string; outcome: GateOutcome }
+export type GateHealth = {
+  checkFailures: number      // F1-F5: the gate is degraded while > 0
+  recordFailures: number     // F6, F7: a checked spawn whose records were lost
+  last: GateFault | null     // the newest failure of either kind
+  since: number              // epoch ms the mod last loaded (session.start)
+}
+// An agent the gate did not hold to a unit (0.11.0).
+export type Ungated = 'workflow' | 'resumed' | 'nested' | 'exempt' | 'unseen'
+export type UngatedMark = { why: Ungated; run?: string }   // run: a workflow agent's run id
 export type Phase = 'analysis' | 'design' | 'approval' | 'executing' | 'testing' | 'review' | 'done'
 // ---- routing (0.6.0): the Model Routing Policy on the board. The policy's own
 // text lives in hooks/policy.ts and nowhere else. A worker's tier is MEASURED
@@ -166,6 +182,6 @@ export type RowPost = { select: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    'flowestra': { board: Shaped<Board>; live: Shaped<Live>; detail: Shaped<Detail>; ui: Shaped<Ui>; log: Shaped<Log> }
+    'flowestra': { board: Shaped<Board>; live: Shaped<Live>; detail: Shaped<Detail>; ui: Shaped<Ui>; log: Shaped<Log>; gate: Shaped<GateHealth> }
   }
 }

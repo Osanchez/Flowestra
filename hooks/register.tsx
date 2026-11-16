@@ -25,11 +25,24 @@
 // `<config root>/flowestra/journal/<repo-key>/<task-id>/<phase>/` (brief at
 // spawn, result at completion, verdict line when a verdict changes), with the
 // indexes above it and the task's state.md / state.json. The journal is written
-// through a queue of its own (journalQueue): a failure there never touches the
-// spawn, the board or the tool's answer. Concurrent sessions (option J1): this
-// session writes only its own entries and its own shard file
+// through a queue of its own (journal-fs.ts's `journaled`): a failure there never
+// touches the spawn, the board or the tool's answer. Concurrent sessions (option
+// J1): this session writes only its own entries and its own shard file
 // (`.shards/<sid8>.tsv`) in each folder; every index.md is regenerated from the
 // folder's shards, and once more if a shard changed while it was written.
+//
+// The journal's file layer (0.11.0): every read and write of the journal, the
+// one journal queue and the one cache of this session's shard files live in
+// journal-fs.ts, shared with upkeep.ts, so a runtime has one of each. Entries
+// are found by listing their files (a lost shard line hides nothing); each
+// state.json has a backup copy, state.bak.json; result parts are written before
+// the entry that names them. What is written is masked and stored less at write
+// time (redact.ts's storedEntryData, from the settings journalMasking and
+// journalContent, read once in `register`), audit-file lines are masked too, and
+// the brief a worker receives is never changed by either. `/journal` (upkeep.ts)
+// shows, prunes and checks the journal; nothing is ever deleted on its own, and
+// that command's prune, confirmed by the person's own typed code, is the only
+// way anything in the journal is deleted.
 //
 // Every write to the board goes through changeBoard, which compares the board
 // before and after and pushes what changed (a worker spawned or ended, the
@@ -58,8 +71,29 @@
 // by the gate, and an Agent tool call whose `subagent_type` is `fork` by a
 // `tool.call` hook on the Agent tool. Every refusal path (the gate, the fork
 // hook, the spec check, the context resolution) runs inside guard.ts's
-// failOpen: an error in it refuses nothing. Hiding the built-in agent types and
-// `fork` from the model's listing (agent.offer) is the same policy's §1.
+// runCheck: an error in it refuses nothing unless the setting gateOnError is
+// refuse; the board-free fallback check still refuses forks, replaced
+// built-ins and a model a worker may not run on; each failure is counted and
+// shown. Hiding the built-in agent types and `fork` from the model's listing
+// (agent.offer) is the same policy's §1.
+//
+// Gate health and ungated agents (0.11.0): a check of the gate that fails with
+// an error (the spawn check, the spec check, the context check, the fork check,
+// or the spawn hook itself) is a check failure; a lost record of a checked
+// spawn (its bookkeeping, an audit-file line) a record failure. Both are
+// counted in the gate atom (with a module mirror, kept when a state write
+// fails), written to the audit file as `!gate-error` lines and to the session
+// log; the first check failure of a module load is also told once in the
+// transcript. While any check failed the status line and the band read "gate
+// degraded" until the mod loads again (session start or reload, not /clear),
+// and the AgentBoard answer carries a gate line. Agents the gate passes
+// without holding them to a unit (workflow agents, a resume of an agent no unit
+// covered, the exempt types) are marked ungated on their box, never linked to a
+// unit, given a `!ungated` audit-file line and no journal entry; agents first
+// seen by another event are marked unseen. Nested spawns are held to the same
+// units as the main loop's. The setting gateOnError (`allow` by default,
+// `refuse`) decides whether a spawn the gate could not check starts or is
+// refused.
 //
 // Rewrites: the mod changes a spawn it lets through in two ways only, both for
 // a main-loop spawn a declared unit covers. When the unit names `context`, the
@@ -79,43 +113,73 @@
 import { atom, read, update } from 'claude-code'
 import type { AgentSpawnInput, EngineInterface, Register, Timer, TurnUsage } from 'claude-code'
 
-import type { Board, LogEntry, TaskSlot, Unit, Verdict, WorkerModels } from '../types'
-import { failOpen } from './guard'
+import type { Board, GateCheck, GateFault, GateHealth, GateOutcome, LogEntry, TaskSlot, Unit, UngatedMark, Verdict, WorkerModels } from '../types'
+import { failOpen, runCheck } from './guard'
 import {
-  auditPath,
+  GATE_SHAPE,
+  UNGATED_SHORT,
+  classifySpawn,
+  emptyHealth,
+  faultError,
+  gateAnswerLine,
+  gateFaultLine,
+  gateLogText,
+  gateNotice,
+  gateOnError,
+  isCheck,
+  recordFault,
+  strictRefusal,
+  ungatedLine,
+} from './gate'
+import {
   buildEntry,
-  configRoot,
+  entryFromText,
   entryName,
   entryPath,
   extractContext,
   fitLine,
-  indexText,
-  isoOf,
-  journalRoot,
-  mergeShards,
   parseContextItem,
-  parseShard,
+  parseEntryFileName,
   parseStateJson,
   parseStateWriter,
   phaseDir,
-  phaseIndexLine,
+  phaseLineOfData,
   repoDir,
   repoIndexLine,
   repoKey,
   rootIndexLine,
-  shardLine,
-  shardPath,
   sid8,
   stateJson,
   stateJsonPath,
   stateMd,
   stateMdPath,
+  stateUnreadablePath,
   taskDir,
-  taskIndexLine,
-  unescapeSections,
+  taskLineOf,
   withContext,
 } from './journal'
-import type { ContextStatus, EntryData, EntryStatus, IndexLevel, ResolvedContext, StateInput } from './journal'
+import type { ContextStatus, EntryData, EntryStatus, ResolvedContext, StateInput } from './journal'
+import {
+  auditFilePath,
+  journalRootOf,
+  journaled,
+  listEntryFiles,
+  listOrNone,
+  readOrNull,
+  readShards,
+  readStateText,
+  readWholeEntry,
+  regenIndex,
+  writeShard,
+  writeStateFiles,
+} from './journal-fs'
+import { journalPolicy, maskLine, storedEntryData } from './redact'
+import type { JournalPolicy } from './redact'
+import { registerJournalCommand, runJournalCommand } from './upkeep'
+import { failureText } from './prune'
+
+// entryFromText moved to journal.ts (0.11.0); re-exported for the tests that import it from here.
+export { entryFromText } from './journal'
 import {
   answerBoardCall,
   boardCommandText,
@@ -142,6 +206,7 @@ import {
   auditIssue,
   barred,
   barredUnit,
+  boardFreeCheck,
   coveringUnit,
   denyFork,
   emptyBoard,
@@ -160,8 +225,9 @@ import {
   taskSlots,
   tierOf,
   unitState,
+  ungatedOf,
 } from './state'
-import type { CompleteInfo, ListEntry } from './state'
+import type { CompleteInfo, ListEntry, SpawnRequest } from './state'
 import {
   DETAIL_SHAPE,
   UI_SHAPE,
@@ -187,6 +253,8 @@ const liveAtom = atom({ plugin: 'flowestra', key: 'live' } as const, emptyLive()
 const detailAtom = atom({ plugin: 'flowestra', key: 'detail' } as const, emptyDetail(), { shape: DETAIL_SHAPE })
 const uiAtom = atom({ plugin: 'flowestra', key: 'ui' } as const, emptyUi(), { shape: UI_SHAPE })
 const logAtom = atom({ plugin: 'flowestra', key: 'log' } as const, emptyLog(), { shape: LOG_SHAPE })
+// Gate health (0.11.0): its own atom, so a board that cannot be read never loses the count.
+const gateAtom = atom({ plugin: 'flowestra', key: 'gate' } as const, emptyHealth(0), { shape: GATE_SHAPE })
 
 const PANE_ID = 'flowestra'
 const PANE_TITLE = 'Agent Board'
@@ -209,11 +277,25 @@ let boardQueue: Promise<void> = Promise.resolve()
 // file) is one link, so two spawns never lose a line to each other.
 let auditQueue: Promise<void> = Promise.resolve()
 
-// The journal's own write queue: every journal job (a spawn's entry, a
-// completion, a verdict, a task's slot change) is one link, so two jobs never
-// interleave their read-modify-writes of this session's shard files. Neither
-// queue blocks the other.
-let journalQueue: Promise<void> = Promise.resolve()
+// The journal's own write queue is journal-fs.ts's `journaled`: every journal
+// job (a spawn's entry, a completion, a verdict, a task's slot change, a
+// `/journal` run) is one link, so two jobs never interleave their
+// read-modify-writes of this session's shard files. Neither queue blocks the
+// other.
+
+// The journal settings (masking, content), as `register` read them from the
+// options: a module variable, set once per module load by `register` (a setting
+// change reloads the module), so the audit file's appends and the entry writes
+// read the same policy without a parameter through the gate-health code.
+let policyNow: JournalPolicy = { masking: true, content: 'full' }
+
+// The gate's health as this module load counted it: updated first (a plain
+// assignment) on every failure, so the count survives a state write that
+// fails; read beside the gate atom (readGate). `gateNoticed`: the one-time
+// transcript notice has been given in this module load. Both are reset by
+// session.start, and a hot reload drops them with the old module.
+let gateMirror: GateHealth = emptyHealth(0)
+let gateNoticed = false
 
 /** What this session needs to rewrite one of its own journal entries. */
 type JournalEntry = {
@@ -230,17 +312,6 @@ type JournalEntry = {
 // empties it; an entry missing from it is rebuilt on demand from its file
 // (rebuildEntry), found through the board's box and the task's phase shards.
 const journalEntries = new Map<string, JournalEntry>()
-
-// This session's shard files, by path: child key → shard line. A module map
-// rebuilt on demand by reading the file (only this session writes it).
-const shardCache = new Map<string, Map<string, string>>()
-
-/** Runs `body` as the next link of the journal queue; settles when it has run, never rejects. */
-async function journaled(body: () => Promise<void>): Promise<void> {
-  const link = journalQueue.then(body)
-  journalQueue = link.catch(() => undefined)
-  await link.catch(() => undefined)
-}
 
 /** Runs `body` as the next link of the board-write queue; settles (or rejects) with that link alone. */
 function queued(body: () => Promise<void>): Promise<void> {
@@ -418,12 +489,18 @@ type SpawnSeen = {
   prompt: string
   resumed: boolean
   models: WorkerModels
+  ungated: UngatedMark | null // the gate did not hold it to a unit (0.11.0)
 }
 
-/** Whether a spec path names no file on disk; false when the check itself fails (the gate fails open). */
-async function specIsMissing($: EngineInterface, spec: string | null | undefined): Promise<boolean> {
-  if (typeof spec !== 'string' || spec === '') return false
-  return (await failOpen(async () => !(await $.fs.exists(spec)))) ?? false
+/**
+ * Whether a spec path names no file on disk. When the check itself fails it
+ * counts as there (`missing` false) and gives the fault (`spec check`).
+ */
+async function specIsMissing($: EngineInterface, spec: string | null | undefined): Promise<{ missing: boolean; fault: GateFault | null }> {
+  if (typeof spec !== 'string' || spec === '') return { missing: false, fault: null }
+  const r = await runCheck(async () => !(await $.fs.exists(spec)))
+  if (r.ok) return { missing: r.value ?? false, fault: null }
+  return { missing: false, fault: await faultOf($, 'spec check', r.error) }
 }
 
 type SpawnFields = Pick<
@@ -434,41 +511,61 @@ type SpawnFields = Pick<
 /**
  * The Model Routing Policy's refusal (§1, §8, §9, a missing spec file, a
  * context item that did not resolve) for an Agent call, or null when it may
- * start (state.ts's spawnCheck). Runs inside failOpen: any error here means no
- * refusal.
+ * start (state.ts's spawnCheck). Runs inside runCheck: an error here means no
+ * refusal, and is given back as a fault (`spawn check`), beside the spec
+ * check's own fault.
  */
-async function spawnRefusal($: EngineInterface, e: SpawnFields, contextMissing: string | null, models: WorkerModels): Promise<string | null> {
-  return failOpen(async () => {
+async function spawnRefusal(
+  $: EngineInterface,
+  e: SpawnFields,
+  contextMissing: string | null,
+  models: WorkerModels,
+): Promise<{ refusal: string | null; faults: GateFault[] }> {
+  const faults: GateFault[] = []
+  const r = await runCheck(async () => {
     const board = await read($, boardAtom)
     const unit = coveringUnit(board, { name: e.name, description: e.description })
-    return spawnCheck(board, {
-      subagentType: e.subagentType,
-      workerTier: tierOfWorkerType(e.subagentType),
-      model: e.model,
-      name: e.name,
-      description: e.description,
-      fork: e.fork,
-      workflow: e.workflow !== undefined,
-      resume: e.resume !== undefined,
-      nested: e.parentAgentId !== undefined,
-      models,
-      specMissing: unit !== null ? await specIsMissing($, unit.spec) : false,
-      contextMissing,
-    })
+    let specMissing = false
+    if (unit !== null) {
+      const spec = await specIsMissing($, unit.spec)
+      specMissing = spec.missing
+      if (spec.fault !== null) faults.push(spec.fault)
+    }
+    return spawnCheck(board, { ...spawnRequest(e, models), specMissing, contextMissing })
   })
+  if (!r.ok) faults.push(await faultOf($, 'spawn check', r.error))
+  return { refusal: r.ok ? r.value : null, faults }
+}
+
+/** The gate's request for an Agent call, with nothing read from the board or the disk. */
+function spawnRequest(e: SpawnFields, models: WorkerModels): SpawnRequest {
+  return {
+    subagentType: e.subagentType,
+    workerTier: tierOfWorkerType(e.subagentType),
+    model: e.model,
+    name: e.name,
+    description: e.description,
+    fork: e.fork,
+    workflow: e.workflow !== undefined,
+    resume: e.resume !== undefined,
+    resumeOf: e.resume?.agentId ?? null,
+    nested: e.parentAgentId !== undefined,
+    models,
+  }
 }
 
 /** The context the covering unit names, resolved: the texts to inline, or the first item that did not resolve. */
 type SpawnContext = { resolved: ResolvedContext[]; missing: string | null }
 
 /**
- * The covering unit's `context` items, resolved (W3), for a main-loop spawn the
- * gate judges; null when there is none to resolve. Runs inside failOpen: an
- * error while resolving gives null (no refusal, no context inlined).
+ * The covering unit's `context` items, resolved (W3), for a spawn the gate
+ * judges (a nested one included); null when there is none to resolve. Runs
+ * inside runCheck: an error while resolving gives no context (no refusal, none
+ * inlined) and the fault (`context check`).
  */
-async function spawnContext($: EngineInterface, e: SpawnFields): Promise<SpawnContext | null> {
-  return failOpen(async () => {
-    if (e.fork || e.workflow !== undefined || e.resume !== undefined || e.parentAgentId !== undefined) return null
+async function spawnContext($: EngineInterface, e: SpawnFields): Promise<{ context: SpawnContext | null; fault: GateFault | null }> {
+  const r = await runCheck<SpawnContext>(async () => {
+    if (e.fork || e.workflow !== undefined || e.resume !== undefined) return null
     const board = await read($, boardAtom)
     const unit = coveringUnit(board, { name: e.name, description: e.description })
     if (unit === null) return null
@@ -478,6 +575,7 @@ async function spawnContext($: EngineInterface, e: SpawnFields): Promise<SpawnCo
     const rest = own.length === 0 ? { resolved: [], missing: null } : await resolveContext($, board, own)
     return implicit === null ? rest : { resolved: [implicit, ...rest.resolved], missing: rest.missing }
   })
+  return r.ok ? { context: r.value, fault: null } : { context: null, fault: await faultOf($, 'context check', r.error) }
 }
 
 /**
@@ -547,12 +645,17 @@ async function taskCwd($: EngineInterface): Promise<string | null> {
   })
 }
 
-/** The Agent tool's fork refusal (B2): `denyFork()` for a call whose `subagent_type` is `fork`, else null. Fails open. */
-async function forkRefusal(input: unknown): Promise<string | null> {
-  return failOpen(() => {
+/**
+ * The Agent tool's fork refusal (B2): `denyFork()` for a call whose
+ * `subagent_type` is `fork`, else null. An error in the check refuses nothing
+ * and gives the fault (`fork check`).
+ */
+async function forkRefusal($: EngineInterface, input: unknown): Promise<{ refusal: string | null; fault: GateFault | null }> {
+  const r = await runCheck(() => {
     const type = input !== null && typeof input === 'object' ? (input as { subagent_type?: unknown }).subagent_type : undefined
     return type === 'fork' ? denyFork() : null
   })
+  return r.ok ? { refusal: r.value, fault: null } : { refusal: null, fault: await faultOf($, 'fork check', r.error) }
 }
 
 /** One audit entry on the session log for a refused spawn. */
@@ -588,26 +691,13 @@ async function auditedUnit($: EngineInterface, e: Pick<AgentSpawnInput, 'name' |
   }
 }
 
-/** The config root (B3.5): CLAUDE_CONFIG_DIR, else <HOME>/.claude, else <USERPROFILE>/.claude, else <plugin root>/data. */
-async function configRootOf($: EngineInterface): Promise<string> {
-  const configDir = await $.env.get('CLAUDE_CONFIG_DIR')
-  const home = await $.env.get('HOME')
-  const userProfile = await $.env.get('USERPROFILE')
-  return configRoot({ configDir, home, userProfile, pluginRoot: $.plugin.root })
-}
-
-/** This session's audit file: `<config root>/flowestra/audit/<session id>.log`. */
-async function auditFilePath($: EngineInterface): Promise<string> {
-  return auditPath(await configRootOf($), await $.session.id())
-}
-
-/** The journal's root: `<config root>/flowestra/journal`. */
-async function journalRootOf($: EngineInterface): Promise<string> {
-  return journalRoot(await configRootOf($))
-}
-
-/** Appends one line to the audit file as the next link of the audit queue: read (empty when missing), then write the whole file. */
+/**
+ * Appends one line to the audit file as the next link of the audit queue: read
+ * (empty when missing), then write the whole file. The line is masked first
+ * (redact.ts's maskLine) when the journalMasking setting is on.
+ */
 async function appendAudit($: EngineInterface, line: string): Promise<void> {
+  const stored = policyNow.masking ? maskLine(line) : line
   const link = auditQueue.then(async () => {
     const path = await auditFilePath($)
     let text = ''
@@ -616,7 +706,7 @@ async function appendAudit($: EngineInterface, line: string): Promise<void> {
     } catch {
       text = '' // no file yet
     }
-    await $.fs.write(path, `${text}${line}\n`)
+    await $.fs.write(path, `${text}${stored}\n`)
   })
   auditQueue = link.catch(() => undefined) // a failed append never breaks the chain
   await link
@@ -626,6 +716,133 @@ async function appendAudit($: EngineInterface, line: string): Promise<void> {
 async function auditSpawn($: EngineInterface, unit: Unit, agentId: string): Promise<void> {
   const at = await now($)
   await appendAudit($, `${new Date(at).toISOString()} | ${unit.id} | ${agentId} | ${unit.audit}`)
+}
+
+// ---------------------------------------------------------------- gate health (decisions.md 0.11.0 part 1, 3 and 4.6)
+
+/** The time of a fault: the engine's clock, else the process clock. Never throws. */
+async function faultTime($: EngineInterface): Promise<number> {
+  try {
+    return await now($)
+  } catch {
+    return Date.now()
+  }
+}
+
+/** A fault of `where`, stamped now, its error written by the audit file's rule; `started unchecked` until the caller sets the outcome. */
+async function faultOf(
+  $: EngineInterface,
+  where: GateFault['where'],
+  error: unknown,
+  outcome: GateOutcome = 'started unchecked',
+): Promise<GateFault> {
+  return { where, at: await faultTime($), error: faultError(error), outcome }
+}
+
+/** The error text of a failed hook (a `.catch` handler's `next.error`): `timeout` for a timeout. */
+function hookError(error: { kind: 'throw' | 'timeout'; message?: string } | undefined): string {
+  if (error !== undefined && error.kind === 'timeout') return 'timeout'
+  return faultError(error?.message)
+}
+
+/**
+ * Counts one failure: the mirror first (a plain assignment), then the gate
+ * atom, then one session-log entry (5.3), then, for the first check failure of
+ * this module load that started a spawn unchecked or refused it in strict mode,
+ * the transcript notice (3.4). Each step in its own try: never throws.
+ */
+async function noteFault($: EngineInterface, f: GateFault, label: string | null): Promise<void> {
+  gateMirror = recordFault(gateMirror, f)
+  try {
+    await update($, gateAtom, h => recordFault(h, f))
+  } catch {
+    // the mirror keeps the count
+  }
+  try {
+    const entry: LogEntry = { at: f.at, kind: 'audit', who: 'lead', text: gateLogText(f, label) }
+    await update($, logAtom, log => logPush(log, [entry]))
+  } catch {
+    // the log misses this failure; the count and the audit file keep it
+  }
+  const told = f.outcome === 'started unchecked' || f.outcome === 'refused (strict)'
+  if (isCheck(f.where) && told && !gateNoticed) {
+    gateNoticed = true
+    try {
+      $.ui.log(gateNotice(f, await auditFilePath($), f.outcome === 'refused (strict)'))
+    } catch {
+      // no notice; the board shows the degraded state
+    }
+  }
+}
+
+/** The gate's health: the atom, else the mirror; the one that counted more failures. Never throws. */
+async function readGate($: EngineInterface): Promise<GateHealth> {
+  let stored: GateHealth | null = null
+  try {
+    stored = await read($, gateAtom)
+  } catch {
+    stored = null
+  }
+  const total = (h: GateHealth) => h.checkFailures + h.recordFailures
+  return stored !== null && total(stored) >= total(gateMirror) ? stored : gateMirror
+}
+
+/** The AgentBoard answer's gate line (5.4), or '' when nothing failed or it cannot be made. */
+async function gateLine($: EngineInterface, at: number): Promise<string> {
+  try {
+    const h = await readGate($)
+    if (h.checkFailures + h.recordFailures === 0) return ''
+    return gateAnswerLine(h, at, await auditFilePath($))
+  } catch {
+    return ''
+  }
+}
+
+/** A failed audit-file append: counted as a record failure (`audit file`), never written to the audit file. Never throws. */
+async function noteAuditFailure($: EngineInterface, err: unknown): Promise<void> {
+  try {
+    await noteFault($, await faultOf($, 'audit file', err, 'recorded only'), null)
+  } catch {
+    // noteFault never throws; nothing more to do
+  }
+}
+
+/** The audit file's `!gate-error` line for a fault (3.5); `agentId` null when none started. Never throws. */
+async function auditGateFault($: EngineInterface, agentId: string | null, f: GateFault): Promise<void> {
+  try {
+    await appendAudit($, gateFaultLine(new Date(f.at).toISOString(), agentId, f))
+  } catch (err) {
+    await noteAuditFailure($, err)
+  }
+}
+
+/** The audit file's `!ungated` line for an agent that started ungated (3.5). Never throws. */
+async function auditUngated(
+  $: EngineInterface,
+  agentId: string,
+  mark: UngatedMark,
+  e: Pick<AgentSpawnInput, 'subagentType' | 'description'>,
+  model: string | null,
+): Promise<void> {
+  try {
+    const iso = new Date(await now($)).toISOString()
+    await appendAudit($, ungatedLine(iso, agentId, mark, e.subagentType, model, e.description))
+  } catch (err) {
+    await noteAuditFailure($, err)
+  }
+}
+
+/**
+ * The mark of a resumed spawn: none when the board saw the agent gated (a box
+ * with `routed`; resumeCheck re-checks it), else `resumed`, also when the board
+ * cannot be read.
+ */
+async function resumeMark($: EngineInterface, agentId: string): Promise<UngatedMark | null> {
+  const r = await runCheck(async () => {
+    const board = await read($, boardAtom)
+    return board.agents[agentId]?.routed ? true : null
+  })
+  return r.ok && r.value === true ? null : { why: 'resumed' }
 }
 
 // ---------------------------------------------------------------- the journal (decisions.md 0.7.0, section 2)
@@ -652,87 +869,32 @@ function fieldsOf(line: string): string[] {
   return line.split(' | ')
 }
 
-/** Lists a folder; [] when it is missing or cannot be listed. */
-async function listOrNone($: EngineInterface, folder: string): Promise<{ name: string; kind: string; mtimeMs: number }[]> {
-  try {
-    return (await $.fs.list(folder)).map(x => ({ name: x.name, kind: x.kind, mtimeMs: x.mtimeMs }))
-  } catch {
-    return []
-  }
-}
-
-/** A file's text, or null when it cannot be read. */
-async function readOrNull($: EngineInterface, path: string): Promise<string | null> {
-  try {
-    return String(await $.fs.read(path))
-  } catch {
-    return null
-  }
-}
-
-/** Sets this session's shard line for `key` in `folder` and writes the shard file whole. */
-async function writeShard($: EngineInterface, folder: string, key: string, line: string, at: number): Promise<void> {
-  const path = shardPath(folder, await $.session.id())
-  let lines = shardCache.get(path)
-  if (lines === undefined) {
-    lines = new Map()
-    for (const s of parseShard((await readOrNull($, path)) ?? '')) lines.set(s.key, shardLine(Date.parse(s.at) || at, s.key, s.line))
-    shardCache.set(path, lines)
-  }
-  lines.set(key, shardLine(at, key, line))
-  await $.fs.write(path, `${[...lines.values()].join('\n')}\n`)
-}
-
-/** Every session's shard of a folder, merged (newest line per child key), with the mtimes seen. */
-async function readShards($: EngineInterface, folder: string): Promise<{ lines: string[]; seen: Map<string, number> }> {
-  const dir = `${folder}/.shards`
-  const files = (await listOrNone($, dir)).filter(f => f.kind === 'file' && f.name.endsWith('.tsv'))
-  const seen = new Map<string, number>()
-  const texts: string[] = []
-  for (const f of files) {
-    const text = await readOrNull($, `${dir}/${f.name}`)
-    if (text === null) continue
-    seen.set(f.name, f.mtimeMs)
-    texts.push(text)
-  }
-  return { lines: mergeShards(texts.map(parseShard)), seen }
-}
+/** One entry of a task: its file, and its merged phase index line (null when no shard has one). */
+type EntryRef = { phase: string; file: string; unitId: string; line: string | null; path: string }
 
 /**
- * Regenerates a folder's index.md from its shards (J1): merge, write; then list
- * the shards again and regenerate once more when one is newer than when it was
- * read (or new). Returns the merged lines.
+ * Every entry of a task across its phase folders, newest first (F2): the entry
+ * files each folder lists are authoritative; each gets the merged shard line of
+ * its name when one exists. The unit id is the line's, else the file name's. A
+ * shard line whose file is gone is ignored.
  */
-async function regenIndex($: EngineInterface, folder: string, level: IndexLevel, name: string, at: number): Promise<string[]> {
-  let got = await readShards($, folder)
-  await $.fs.write(`${folder}/index.md`, indexText(level, name, got.lines, at))
-  const again = (await listOrNone($, `${folder}/.shards`)).filter(f => f.kind === 'file' && f.name.endsWith('.tsv'))
-  const changed = again.some(f => {
-    const was = got.seen.get(f.name)
-    return was === undefined || f.mtimeMs > was
-  })
-  if (changed) {
-    got = await readShards($, folder)
-    await $.fs.write(`${folder}/index.md`, indexText(level, name, got.lines, at))
-  }
-  return got.lines
-}
-
-/** One entry of a task, read off its phase index lines. */
-type EntryRef = { phase: string; file: string; unitId: string; line: string; path: string }
-
-/** Every entry of a task across its phase folders (all sessions' shards), newest first. */
 async function taskEntries($: EngineInterface, place: TaskPlace, taskId: string): Promise<EntryRef[]> {
   const dir = taskDir(place.root, place.key, taskId)
   const out: EntryRef[] = []
   for (const d of await listOrNone($, dir)) {
     if (d.kind !== 'dir' || d.name.startsWith('.')) continue
     const folder = phaseDir(place.root, place.key, taskId, d.name)
+    const files = await listEntryFiles($, folder)
+    if (files.length === 0) continue
+    const lines = new Map<string, string>()
     for (const line of (await readShards($, folder)).lines) {
-      const f = fieldsOf(line)
-      const file = f[0] ?? ''
-      if (file === '') continue
-      out.push({ phase: d.name, file, unitId: f[1] ?? '', line, path: `${folder}/${file}` })
+      const file = fieldsOf(line)[0] ?? ''
+      if (file !== '') lines.set(file, line)
+    }
+    for (const f of files) {
+      const line = lines.get(f.name) ?? null
+      const unitId = (line === null ? undefined : fieldsOf(line)[1]) || (parseEntryFileName(f.name)?.unitId ?? '')
+      out.push({ phase: d.name, file: f.name, unitId, line, path: `${folder}/${f.name}` })
     }
   }
   return out.sort((a, b) => (a.file < b.file ? 1 : a.file > b.file ? -1 : 0))
@@ -755,23 +917,10 @@ async function stateInputOf($: EngineInterface, board: Board, slot: TaskSlot, pl
   }
 }
 
-/** Rewrites a task's state.md and state.json (last writer wins). */
+/** Rewrites a task's state.md, state.bak.json and state.json (last writer wins; F1: the backup before the main file). */
 async function writeState($: EngineInterface, board: Board, slot: TaskSlot, place: TaskPlace, at: number): Promise<void> {
   const input = await stateInputOf($, board, slot, place, at)
-  await $.fs.write(stateMdPath(place.root, place.key, slot.taskId), stateMd(input))
-  await $.fs.write(stateJsonPath(place.root, place.key, slot.taskId), stateJson(input))
-}
-
-/** A phase index line's verdict counts and entries, as the task index line for that phase. */
-function taskLineOf(phase: string, phaseLines: readonly string[], at: number): string {
-  let accepted = 0
-  let rejected = 0
-  for (const l of phaseLines) {
-    const v = fieldsOf(l)[5]
-    if (v === 'accepted') accepted += 1
-    else if (v === 'rejected') rejected += 1
-  }
-  return taskIndexLine({ phase, entries: phaseLines.length, accepted, rejected, unchecked: phaseLines.length - accepted - rejected, updatedMs: at })
+  await writeStateFiles($, place.root, place.key, slot.taskId, stateMd(input), stateJson(input))
 }
 
 /** Writes this session's line for `phase` in the task's shard, regenerates the task index. */
@@ -794,30 +943,21 @@ async function updateRepoIndex($: EngineInterface, place: TaskPlace, slot: TaskS
   await regenIndex($, place.root, 'root', 'journal', at)
 }
 
-/** The phase index line of one of this session's entries. */
-function phaseLineOf(je: JournalEntry): string {
-  const d = je.data
-  const results = [d.result, ...d.resumes.map(r => r.result)].filter((r): r is string => r !== null)
-  return phaseIndexLine({
-    file: `${je.name}.md`,
-    unitId: d.unitId,
-    tier: d.tier,
-    kind: d.kind,
-    status: d.status,
-    verdict: d.verdict,
-    briefChars: d.brief.length,
-    resultChars: results.length === 0 ? null : results.reduce((n, r) => n + r.length, 0),
-    audit: d.audit,
-  })
-}
-
-/** Writes one of this session's entries (and its result parts), then its phase index line; returns the phase's merged lines. */
+/**
+ * Writes one of this session's entries, then its phase index line; returns the
+ * phase's merged lines. What is written is the stored form of the entry's data
+ * (redact.ts's storedEntryData: stored less per journalContent, then masked per
+ * journalMasking); `je.data` itself keeps the raw data. The result part files
+ * are written before the entry that names them (F4), and the index line is
+ * computed from the stored data.
+ */
 async function writeEntry($: EngineInterface, je: JournalEntry, at: number): Promise<string[]> {
-  const files = buildEntry(je.name, je.data)
+  const stored = storedEntryData(je.data, policyNow)
+  const files = buildEntry(je.name, stored)
   const folder = phaseDir(je.root, je.key, je.taskId, je.phase)
-  await $.fs.write(entryPath(je.root, je.key, je.taskId, je.phase, je.name), files.text)
   for (const p of files.parts) await $.fs.write(`${folder}/${p.name}`, p.text)
-  await writeShard($, folder, `${je.name}.md`, phaseLineOf(je), at)
+  await $.fs.write(entryPath(je.root, je.key, je.taskId, je.phase, je.name), files.text)
+  await writeShard($, folder, `${je.name}.md`, phaseLineOfData(`${je.name}.md`, stored), at)
   return regenIndex($, folder, 'phase', je.phase, at)
 }
 
@@ -888,25 +1028,7 @@ async function newEntry(
   }
 }
 
-const HEADING_RESULT = /^## Result( \d+)?$/
-
-/** An entry's text with each split result (`(stored in a, b)`) replaced by the joined text of its part files. */
-async function readWholeEntry($: EngineInterface, path: string): Promise<string> {
-  const text = String(await $.fs.read(path))
-  if (!/^results: stored beside this file/m.test(text)) return text
-  const folder = path.replace(/[\\/][^\\/]*$/, '')
-  const lines = text.split('\n')
-  for (let i = 1; i < lines.length; i++) {
-    const m = /^\(stored in (.+)\)$/.exec(lines[i] ?? '')
-    if (m === null || !HEADING_RESULT.test(lines[i - 1] ?? '')) continue
-    let joined = ''
-    for (const name of (m[1] ?? '').split(', ')) joined += String(await $.fs.read(`${folder}/${name}`))
-    lines[i] = joined
-  }
-  return lines.join('\n')
-}
-
-/** The newest entry of unit `unitId` of task `taskId`: its path, from the task's phase shards; null when none. */
+/** The newest entry of unit `unitId` of task `taskId`: its path, from the task's entry files (F2); null when none. */
 async function newestEntryOf($: EngineInterface, board: Board, taskId: string, unitId: string): Promise<string | null> {
   const root = await journalRootOf($)
   const keys: string[] = []
@@ -921,78 +1043,11 @@ async function newestEntryOf($: EngineInterface, board: Board, taskId: string, u
   return null
 }
 
-const CONTEXT_STATUS = /(.+?) \((inlined \d+ chars|cut at \d+ of \d+|path only)\)(?:, |$)/g
-
-/** An entry file's text (results already joined) back to its data; null when it is not one. Exported for its test. */
-export function entryFromText(text: string): EntryData | null {
-  const lines = text.replace(/\n$/, '').split('\n')
-  const head = (re: RegExp) => {
-    for (const l of lines.slice(0, 9)) {
-      const m = re.exec(l)
-      if (m !== null) return m
-    }
-    return null
-  }
-  const dash = (v: string | undefined) => (v === undefined || v === '-' ? null : v)
-  const title = /^# (.+?) · (.+?) · (.*)$/.exec(lines[0] ?? '')
-  const audit = head(/^audit: (.*)$/)
-  const tier = head(/^tier: (.+?) · kind: (.+?) · phase: (.+?) · wave: (.+)$/)
-  const agent = head(/^agent: (.+?) · type: (.+?) · model: (.+?) · session: (.+)$/)
-  const cwd = head(/^cwd: (.*?) · context: (.*)$/)
-  const times = head(/^spawned: (\S+) · ended: (\S+) · status: (\w+)$/)
-  const verdict = head(/^verdict: (\w+)(?: · at (\S+))?$/)
-  if (!title || !audit || !tier || !agent || !cwd || !times || !verdict) return null
-  const context: ContextStatus[] = []
-  if (cwd[2] !== 'none') for (const m of (cwd[2] ?? '').matchAll(CONTEXT_STATUS)) context.push({ item: m[1] ?? '', status: m[2] ?? '' })
-  const brief = lines.indexOf('## Brief')
-  if (brief < 0) return null
-  const sections: { head: string; body: string[] }[] = []
-  for (let i = brief; i < lines.length; i++) {
-    const l = lines[i] ?? ''
-    if (/^## (Brief|Result|Message \d+|Result \d+)$/.test(l)) sections.push({ head: l, body: [] })
-    else sections[sections.length - 1]?.body.push(l)
-  }
-  const bodyOf = (h: string) => {
-    const body = sections.find(s => s.head === h)?.body.join('\n')
-    return body === undefined ? null : unescapeSections(body)
-  }
-  const resumes: EntryData['resumes'] = []
-  for (let n = 2; bodyOf(`## Message ${n}`) !== null; n++) resumes.push({ message: bodyOf(`## Message ${n}`) ?? '', result: bodyOf(`## Result ${n}`) || null })
-  const statuses: EntryStatus[] = ['running', 'done', 'failed', 'stopped']
-  const status = statuses.find(s => s === times[3]) ?? 'running'
-  const v = verdict[1] === 'accepted' || verdict[1] === 'rejected' ? (verdict[1] as Verdict) : null
-  const phase = dash(tier[3])
-  const wave = Number(tier[4])
-  return {
-    taskId: title[1] ?? '',
-    unitId: title[2] ?? '',
-    label: title[3] ?? '',
-    audit: dash(audit[1]),
-    tier: (dash(tier[1]) as EntryData['tier']) ?? null,
-    kind: (dash(tier[2]) as EntryData['kind']) ?? null,
-    phase: phase === null || phase === 'unset' ? null : (phase as EntryData['phase']),
-    wave: Number.isFinite(wave) ? wave : null,
-    agentId: agent[1] ?? '',
-    subagentType: dash(agent[2]),
-    model: dash(agent[3]),
-    sessionId: agent[4] ?? '',
-    cwd: dash(cwd[1]),
-    context,
-    spawnedMs: Date.parse(times[1] ?? '') || 0,
-    endedMs: times[2] === 'running' ? null : Date.parse(times[2] ?? '') || null,
-    status,
-    verdict: v,
-    verdictMs: verdict[2] ? Date.parse(verdict[2]) || null : null,
-    brief: bodyOf('## Brief') ?? '',
-    result: bodyOf('## Result') || null,
-    resumes,
-  }
-}
-
 /**
  * One of this session's entries by agent id: from the module map, else rebuilt
  * from its file (after a hot reload), found through the agent's box (its task
- * and unit) and the task's phase shards. Null when the agent has no entry.
+ * and unit) and the task's entry files (F2: also when its shard line is
+ * missing). Null when the agent has no entry.
  */
 async function entryOf($: EngineInterface, agentId: string): Promise<JournalEntry | null> {
   const known = journalEntries.get(agentId)
@@ -1062,7 +1117,9 @@ function verdictChanges(before: Board, after: Board): VerdictChange[] {
 /**
  * A verdict change: the unit's newest entry gets it. This session's own entry
  * is rewritten (its verdict line); another session's is not touched (J1): only
- * its phase index line, with the new verdict, goes into this session's shard.
+ * its phase index line, with the new verdict, goes into this session's shard
+ * (F2: when no shard has a line for the entry, the line is rebuilt from the
+ * entry file; when that file does not parse, the verdict misses the journal).
  * Then the task index line for that phase.
  */
 async function journalVerdict($: EngineInterface, board: Board, change: VerdictChange, at: number): Promise<void> {
@@ -1079,7 +1136,13 @@ async function journalVerdict($: EngineInterface, board: Board, change: VerdictC
     je.data = { ...je.data, verdict: change.verdict, verdictMs: at }
     phaseLines = await writeEntry($, je, at)
   } else {
-    const f = fieldsOf(newest.line)
+    let line = newest.line
+    if (line === null) {
+      const data = entryFromText(await readWholeEntry($, newest.path))
+      if (data === null) return
+      line = phaseLineOfData(newest.file, data)
+    }
+    const f = fieldsOf(line)
     f[5] = change.verdict ?? 'unchecked'
     const folder = phaseDir(place.root, place.key, change.taskId, newest.phase)
     await writeShard($, folder, newest.file, fitLine(f, [8, 1]), at)
@@ -1132,13 +1195,33 @@ async function journalBoardChange($: EngineInterface, before: Board, after: Boar
 
 // ---------------------------------------------------------------- the AgentBoard tool's update and answer
 
-/** The slot a task's state.json holds, from the journal of `repo`; null when there is none or it does not parse. */
-async function storedSlot($: EngineInterface, repo: string, taskId: string): Promise<TaskSlot | null> {
-  return failOpen(async () => {
-    const text = await readOrNull($, stateJsonPath(await journalRootOf($), repoKey(repo), taskId))
-    if (text === null) return null
-    const slot = parseStateJson(text)
-    return slot !== null && slot.taskId === taskId ? slot : null
+/** What the journal of a repository holds for a task id: its slot, or the text of a state file that cannot be read. */
+type StoredState = { slot: TaskSlot | null; unreadable: { path: string; text: string } | null }
+
+/**
+ * The slot a task's state holds, from the journal of `repo` (F1): state.json,
+ * else its backup state.bak.json; `unreadable` (the path of state.json and the
+ * text read) when a state file is there but neither copy parses. Both null when
+ * there is none, it names another task, or the journal cannot be read.
+ */
+async function storedSlot($: EngineInterface, repo: string, taskId: string): Promise<StoredState> {
+  return (
+    (await failOpen(async (): Promise<StoredState> => {
+      const root = await journalRootOf($)
+      const key = repoKey(repo)
+      const got = await readStateText($, root, key, taskId)
+      if (got === null) return { slot: null, unreadable: null }
+      if (got.source === 'unreadable') return { slot: null, unreadable: { path: stateJsonPath(root, key, taskId), text: got.text } }
+      const slot = parseStateJson(got.text)
+      return { slot: slot !== null && slot.taskId === taskId ? slot : null, unreadable: null }
+    })) ?? { slot: null, unreadable: null }
+  )
+}
+
+/** Keeps an unreadable state text beside it, as `state.unreadable-<stamp>.json`, before a fresh task of that id is written (F1). Never throws. */
+async function keepUnreadableState($: EngineInterface, repo: string, taskId: string, text: string, at: number): Promise<void> {
+  await journaled(async () => {
+    await $.fs.write(stateUnreadablePath(await journalRootOf($), repoKey(repo), taskId, at), text)
   })
 }
 
@@ -1204,8 +1287,8 @@ async function otherSessionLine($: EngineInterface, board: Board, at: number): P
     const slot = slotOf(board, board.taskId)
     if (slot === null) return null
     const place = await placeOf($, slot)
-    const text = await readOrNull($, stateJsonPath(place.root, place.key, slot.taskId))
-    const writer = text === null ? null : parseStateWriter(text)
+    const got = await readStateText($, place.root, place.key, slot.taskId)
+    const writer = got === null || got.source === 'unreadable' ? null : parseStateWriter(got.text)
     if (writer === null || writer.session === (await $.session.id())) return null
     const age = at - writer.updatedMs
     if (age < 0 || age > OTHER_SESSION_MS) return null
@@ -1230,7 +1313,15 @@ async function boardToolUpdate($: EngineInterface, change: BoardUpdate, line: st
   let applied: BoardUpdate = change
   if (unknown || implicit) {
     const repo = change.repo ?? (await defaultRepo($))
-    if (unknown && id !== undefined && repo !== null) stored = await storedSlot($, repo, id)
+    const found: StoredState = unknown && id !== undefined && repo !== null ? await storedSlot($, repo, id) : { slot: null, unreadable: null }
+    stored = found.slot
+    if (unknown && stored === null && found.unreadable !== null) {
+      if (change.task === undefined) {
+        return { deny: `task "${id}" has a state file that cannot be read (${found.unreadable.path}): give its task line to open it afresh; the unreadable file is kept beside it.` }
+      }
+      // opened afresh over it: the unreadable text is kept beside it before the new task's first write
+      if (id !== undefined && repo !== null) await keepUnreadableState($, repo, id, found.unreadable.text, at)
+    }
     if (unknown && stored === null && change.task === undefined) {
       return { deny: `task "${id}" is not open: give its task line to open it (and its repo when it is not this session's folder)` }
     }
@@ -1254,8 +1345,12 @@ async function boardToolUpdate($: EngineInterface, change: BoardUpdate, line: st
   if (warning !== null) lines.push(warning)
   const tracked = await trackedLine($)
   await journalBoardChange($, before, after, at, entered)
-  if (lines.length === 1) return { text: tracked === '' ? lines[0]! : `${lines[0]} | ${tracked}` }
-  return { text: [...lines, ...(tracked === '' ? [] : [tracked])].join('\n') }
+  const gate = await gateLine($, at) // a last line of its own while any gate failure is counted
+  const text =
+    lines.length === 1
+      ? tracked === '' ? lines[0]! : `${lines[0]} | ${tracked}`
+      : [...lines, ...(tracked === '' ? [] : [tracked])].join('\n')
+  return { text: gate === '' ? text : `${text}\n${gate}` }
 }
 
 async function onSpawn($: EngineInterface, seen: SpawnSeen): Promise<void> {
@@ -1279,6 +1374,7 @@ async function onSpawn($: EngineInterface, seen: SpawnSeen): Promise<void> {
         promptChars: seen.promptChars,
         resumed: seen.resumed,
         models: seen.models,
+        ungated: seen.ungated,
       },
       at,
     ),
@@ -1401,7 +1497,11 @@ async function trackedLine($: EngineInterface): Promise<string> {
       const ranOn = tierOf(board, w)
       const other = otherTaskOf(board, w)
       const issue = auditIssue(board, w)
-      const mark = issue === 'no-audit' ? ', NO AUDIT' : issue === 'tier-mismatch' ? ', TIER MISMATCH' : ''
+      const ungated = ungatedOf(w)
+      const mark =
+        ungated !== null
+          ? `, UNGATED ${UNGATED_SHORT[ungated.why]}`
+          : issue === 'no-audit' ? ', NO AUDIT' : issue === 'tier-mismatch' ? ', TIER MISMATCH' : ''
       return `${w.label} [${w.status}${tier !== null ? `, ${tier}${ranOn !== null && ranOn !== tier && issue !== 'tier-mismatch' ? ` on ${ranOn}` : ''}` : ''}${mark}${w.unitId ? `, unit ${w.unitId}` : ''}${w.tokens ? '' : ', no tokens'}${other !== null ? `, task ${other}` : ''}]`
     })
     return `tracked workers: ${parts.join('; ')}${tail}`
@@ -1422,7 +1522,13 @@ async function baseModel($: EngineInterface, width: number, height: number | nul
   for (const u of board.units) unitStates[u.id] = unitState(board, u)
   const quiet: ViewModel['quiet'] = {}
   for (const box of Object.values(board.agents)) if (isQuiet(box, at)) quiet[box.id] = true
-  return { board, now: at, width, height, unitStates, quiet }
+  let gate: GateHealth | undefined
+  try {
+    gate = await read($, gateAtom) // subscribes the drawing to the gate's health
+  } catch {
+    gate = undefined
+  }
+  return { board, now: at, width, height, unitStates, quiet, gate }
 }
 
 /** The pane's model: reads (and so redraws on) detail, ui and the log as well. */
@@ -1466,9 +1572,27 @@ async function wantsBand($: EngineInterface): Promise<boolean> {
 export const register: Register = (on, options) => {
   const mode = workflowMode(options)
   const models = modelsFromOptions(options)
+  const onError = gateOnError(options)
+  const policy = journalPolicy(options)
+  policyNow = policy
   on('session.start', async ($, e, next) => {
+    // the gate's health clears each time the mod loads (C2), never on /clear
+    gateMirror = emptyHealth(0)
+    gateNoticed = false
+    try {
+      const at = await now($)
+      gateMirror = emptyHealth(at)
+      await update($, gateAtom, () => emptyHealth(at))
+    } catch {
+      // the atom keeps its value; the mirror starts afresh
+    }
     await registerBoardTool($)
     await registerBoardCommand($)
+    try {
+      await registerJournalCommand($)
+    } catch {
+      // never throws; /journal is missing this session, the session goes on
+    }
     try {
       await onSessionStart($, models)
     } catch {
@@ -1501,20 +1625,39 @@ export const register: Register = (on, options) => {
 
   // Forks (B2): an Agent tool call whose subagent_type is `fork` is refused with
   // denyFork's text (the gate refuses a main-loop fork too, should it reach
-  // agent.spawn); every other Agent call goes on untouched. Fails open: an
-  // error in the check, or in this hook, lets the call through.
+  // agent.spawn); every other Agent call goes on untouched. An error in the
+  // check, or in this hook, is counted (`fork check`) and lets the call
+  // through, unless gateOnError is refuse.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
-    const refusal = await forkRefusal(e)
-    if (refusal !== null) {
+    const fork = await forkRefusal($, e)
+    if (fork.fault !== null) {
+      const f: GateFault = { ...fork.fault, outcome: onError === 'refuse' ? 'refused (strict)' : 'started unchecked' }
+      await noteFault($, f, null)
+      await auditGateFault($, null, f)
+      if (onError === 'refuse') return { deny: strictRefusal('fork check', f.error) }
+    }
+    if (fork.refusal !== null) {
       try {
         await logRefusal($, 'fork')
       } catch {
         // the log misses this refusal; the refusal stands
       }
-      return { deny: refusal }
+      return { deny: fork.refusal }
     }
     return next(e)
-  }).catch(($, e, next) => next(e))
+  }).catch(async ($, e, next) => {
+    const strict = onError === 'refuse' && !next.called
+    const f: GateFault = {
+      where: 'fork check',
+      at: await faultTime($),
+      error: hookError(next.error),
+      outcome: next.called ? 'recorded only' : strict ? 'refused (strict)' : 'started unchecked',
+    }
+    await noteFault($, f, null)
+    auditGateFault($, null, f).catch(() => undefined) // not awaited: the handler's grace is short
+    if (strict) return { deny: strictRefusal('fork check', f.error) }
+    return next(e)
+  })
 
   // Every other tool call: last tool, a main-loop SendMessage's arrow, and
   // the run in flight in the agent's detail (only for a call with an id).
@@ -1553,23 +1696,57 @@ export const register: Register = (on, options) => {
   )
 
   on('agent.spawn', async ($, e, next) => {
-    // the covering unit's context, resolved (W3); fails open: null
-    const context = await spawnContext($, e)
-    // the Model Routing Policy's spawn gate (§1, §8, §9, spec on disk, context); fails open
-    const refusal = await spawnRefusal($, e, context?.missing ?? null, models)
+    const label = e.name ?? e.description
+    // the pass rule it falls under, and the mark of a spawn the gate holds to no unit
+    const kind = classifySpawn(e)
+    const mark: UngatedMark | null =
+      kind === 'workflow' && e.workflow !== undefined
+        ? { why: 'workflow', run: e.workflow.runId }
+        : kind === 'exempt'
+          ? { why: 'exempt' }
+          : kind === 'resume' && e.resume !== undefined
+            ? await resumeMark($, e.resume.agentId)
+            : null
+    // the covering unit's context, resolved (W3); an error gives none and a fault
+    const ctx = await spawnContext($, e)
+    const context = ctx.context
+    // the Model Routing Policy's spawn gate (§1, §8, §9, spec on disk, context); an error gives no refusal and a fault
+    const gate = await spawnRefusal($, e, context?.missing ?? null, models)
+    // a failed spawn check is the one fault of this spawn: the other checks read the same board
+    const spawnFault = gate.faults.find(f => f.where === 'spawn check')
+    const faults = spawnFault !== undefined ? [spawnFault] : [...(ctx.fault !== null ? [ctx.fault] : []), ...gate.faults]
+    let refusal = gate.refusal
+    let outcome: GateOutcome = 'started unchecked'
+    if (faults.length > 0) {
+      if (refusal !== null) outcome = 'recorded only' // refused for another reason anyway
+      else {
+        // the refusals that need no board and no disk (3.6); none for a workflow agent or a resume
+        const fallback = kind === 'workflow' || kind === 'resume' ? null : await failOpen(() => boardFreeCheck(spawnRequest(e, models)))
+        if (fallback !== null) {
+          refusal = fallback
+          outcome = 'refused (fallback check)'
+        } else if (onError === 'refuse') {
+          refusal = strictRefusal(faults[0]!.where as GateCheck, faults[0]!.error)
+          outcome = 'refused (strict)'
+        }
+      }
+    }
+    const noted = faults.map(f => ({ ...f, outcome }))
+    for (const f of noted) await noteFault($, f, label)
     if (refusal !== null) {
       try {
-        await logRefusal($, e.name ?? e.description)
+        await logRefusal($, label)
       } catch {
         // the log misses this refusal; the refusal stands
       }
+      for (const f of noted) await auditGateFault($, null, f)
       return { deny: refusal }
     }
-    const unit = await auditedUnit($, e)
-    // the two rewrites, for a main-loop spawn a unit covers: context appended to
-    // the prompt, and cwd set to the task's repository (B2, P1 yes)
+    const unit = mark === null ? await auditedUnit($, e) : null
+    // the two rewrites, for a spawn a unit covers: context appended to the
+    // prompt, and cwd set to the task's repository (B2, P1 yes)
     const inlined = context !== null && context.missing === null && context.resolved.length > 0 ? withContext(e.prompt, context.resolved) : null
-    const cwd = unit !== null && e.cwd === undefined && e.parentAgentId === undefined && e.resume === undefined ? await taskCwd($) : null
+    const cwd = unit !== null && e.cwd === undefined && e.resume === undefined ? await taskCwd($) : null
     const sent = inlined === null && cwd === null ? e : { ...e, ...(inlined !== null ? { prompt: inlined.prompt } : {}), ...(cwd !== null ? { cwd } : {}) }
     const result = await next(sent)
     const started = 'deny' in result && result.deny !== undefined ? null : result
@@ -1587,6 +1764,7 @@ export const register: Register = (on, options) => {
           prompt: e.prompt,
           resumed: e.resume !== undefined,
           models,
+          ungated: mark,
         })
       }
     } catch {
@@ -1594,11 +1772,15 @@ export const register: Register = (on, options) => {
     }
     try {
       if (agentId !== '' && unit !== null) await auditSpawn($, unit, agentId)
-    } catch {
-      // the audit file misses this line; the spawn stands
+    } catch (err) {
+      await noteAuditFailure($, err) // the audit file misses this line; the spawn stands
     }
+    if (started !== null && agentId !== '' && mark !== null) {
+      await auditUngated($, agentId, mark, e, typeof started.model === 'string' && started.model !== '' ? started.model : (e.model ?? null))
+    }
+    for (const f of noted) await auditGateFault($, started !== null && agentId !== '' ? agentId : null, f)
     try {
-      if (agentId !== '' && started !== null) {
+      if (agentId !== '' && started !== null && mark === null) {
         const at = await now($)
         if (e.resume !== undefined) await journalResume($, agentId, e.prompt, at)
         else if (unit !== null) {
@@ -1616,6 +1798,33 @@ export const register: Register = (on, options) => {
       // the journal misses this spawn; the spawn stands
     }
     return result
+  }).catch(async ($, e, next) => {
+    // The hook failed (threw or overran). After its `next` the agent has
+    // started: its bookkeeping is lost (`spawn bookkeeping`, F6). Before it, the
+    // engine would start the spawn with no gate (`spawn hook`, F5): counted, and
+    // refused only in strict mode. The audit line is not awaited before the
+    // answer (the handler's grace is short).
+    const error = hookError(next.error)
+    const label = e.name ?? e.description
+    if (next.called) {
+      const f: GateFault = { where: 'spawn bookkeeping', at: await faultTime($), error, outcome: 'recorded only' }
+      await noteFault($, f, label)
+      const done = await next(e)
+      const id = 'deny' in done && done.deny !== undefined ? null : typeof done.agentId === 'string' ? done.agentId : null
+      auditGateFault($, id, f).catch(() => undefined)
+      return done
+    }
+    const strict = onError === 'refuse'
+    const f: GateFault = { where: 'spawn hook', at: await faultTime($), error, outcome: strict ? 'refused (strict)' : 'started unchecked' }
+    await noteFault($, f, label)
+    if (strict) {
+      auditGateFault($, null, f).catch(() => undefined)
+      return { deny: strictRefusal('spawn hook', error) }
+    }
+    const done = await next(e)
+    const id = 'deny' in done && done.deny !== undefined ? null : typeof done.agentId === 'string' ? done.agentId : null
+    auditGateFault($, id, f).catch(() => undefined)
+    return done
   })
 
   on('turn.start', async ($, e, next) => {
@@ -1665,6 +1874,13 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'board' }, async $ => ({ text: boardCommandText(await toggleBoard($)) })).catch(
     () => ({ text: 'Agent Board: the pane could not be opened or closed.' }),
   )
+
+  // `/journal` (upkeep.ts): status, prune, check. The event's args and origin go
+  // through as received (only the person's own keystroke can confirm a prune);
+  // the board's task slots (active, parked, closed) are what a prune must keep.
+  on('command.run', { command: 'journal' }, async ($, e) => ({
+    text: await runJournalCommand($, e, { slots: taskSlots(await read($, boardAtom)), policy }),
+  })).catch(() => ({ text: failureText() }))
 
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)

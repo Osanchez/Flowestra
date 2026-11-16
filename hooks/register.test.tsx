@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import type { AgentBox, Board, Detail, FlowProps, Live, Log, RowCard, Tier, Ui } from '../types'
+import type { AgentBox, Board, Detail, FlowProps, GateHealth, Live, Log, RowCard, Tier, Ui } from '../types'
+import { gateAnswerLine, gateNotice, strictRefusal } from './gate'
 import { BOARD_PROMPT_SECTION, BOARD_TOOL_FULL_NAME, POLICY_SECTION_ID } from './board'
 import { WORKFLOW_SECTION_ID, workflowText } from './workflow'
 import { modelsFromOptions, modelsNote } from './models'
@@ -10,7 +11,10 @@ import {
   denyContext,
   denyFork,
   denyBuiltin,
+  denyBuiltinNested,
   denyModelOverride,
+  denyNested,
+  denyResumeRejected,
   denyNoModel,
   denyRejected,
   denyRetry,
@@ -21,7 +25,9 @@ import {
 } from './state'
 import { WORKER_NAMES, workerType } from './workers'
 import { entryFromText } from './register'
-import { buildEntry, entryName, isoOf, parseStateJson, phaseIndexLine, repoKey, shardLine, stateJson } from './journal'
+import { buildEntry, entryName, isoOf, parseStateJson, phaseIndexLine, phaseLineOfData, repoKey, shardLine, stateJson, stateUnreadablePath } from './journal'
+import { NOT_STORED } from './redact'
+import { COMMAND_ARGUMENT_HINT, COMMAND_DESCRIPTION, refusedText, statusText } from './prune'
 
 // Every hook here sits beneath the plugin and stands for the engine: a call on
 // `$` is answered `{ value }`, an event by its own result. The plugin under
@@ -82,6 +88,9 @@ type World = {
   failJournal: boolean // fs.write fails for every path under the journal
   spawned: any[] // every agent.spawn input that reached the engine
   ghosts: string[] // paths fs.exists says are there, though fs.read cannot read them
+  gate: GateHealth | null // the gate's health as last stored (0.11.0)
+  uiLogs: string[] // every $.ui.log line, in order
+  commands: any[] // every $.command.register input, in order (0.11.0)
 }
 
 const SONNET = 'claude-sonnet-5-5'
@@ -121,6 +130,7 @@ function engine(on: any, w: World) {
       if (e.key === 'detail') w.detail = e.value.value
       if (e.key === 'ui') w.ui = e.value.value
       if (e.key === 'log') w.log = e.value.value
+      if (e.key === 'gate') w.gate = e.value.value
     }
     if (e.key === 'anim') w.animWrites += 1
     return r
@@ -138,7 +148,10 @@ function engine(on: any, w: World) {
     }
     return next(e)
   })
-  on('command.register', (_: any, e: any) => ({ value: { command: e.name } }))
+  on('command.register', (_: any, e: any) => {
+    w.commands.push(e)
+    return { value: { command: e.name } }
+  })
   on('tool.register', (_: any, e: any) => ({ value: { tool: `mcp__flowestra__${e.name}` } }))
   on('agent.register', (_: any, e: any) => {
     w.registered.push(e.name)
@@ -150,6 +163,10 @@ function engine(on: any, w: World) {
     return { value: w.list }
   })
   on('session.id', () => ({ value: SESSION }))
+  on('ui.log', (_: any, e: any) => {
+    w.uiLogs.push(e.text)
+    return { value: undefined }
+  })
   on('fs.read', (_: any, e: any) => {
     if (!(e.path in w.files)) throw new Error(`ENOENT: ${e.path}`)
     return { value: w.files[e.path] }
@@ -214,7 +231,7 @@ function world(over: Partial<World> = {}): World {
     panes: [], placeOnOpen: true, opens: 0, list: [], listCalls: 0, board: null, live: null, detail: null, ui: null, log: null,
     liveWrites: 0, animWrites: 0, failWrites: false, failLogWrites: false, spawnCalls: 0, spawnModel: null, corruptBoard: false, oldLive: false, reads: [],
     boardGate: null, units: [], registered: [], files: {}, fsWrites: [], failFsWrite: false, failExists: false, env: { HOME },
-    mtimes: {}, root: '/work/main', repo: null, failJournal: false, spawned: [], ghosts: [],
+    mtimes: {}, root: '/work/main', repo: null, failJournal: false, spawned: [], ghosts: [], gate: null, uiLogs: [], commands: [],
     ...over,
   }
 }
@@ -231,6 +248,11 @@ async function start($: any): Promise<void> {
 function boardOf(w: World): Board {
   if (!w.board) throw new Error('the plugin has stored no board')
   return w.board
+}
+
+function gateOf(w: World): GateHealth {
+  if (!w.gate) throw new Error('the plugin has stored no gate value')
+  return w.gate
 }
 
 function liveOf(w: World): Live {
@@ -785,7 +807,7 @@ test('the pane: the flow module with its props on the terminal, the still flow o
   await start($)
   await declare($, w, [unit('U1', 'sonnet', { label: 'Write state' })], { task: 'Build the board', phase: 'executing', wave: 1 })
   await spawn($, 'Write the state module', { name: 'U1' })
-  await spawn($, 'Help the writer', { parentAgentId: 'agent-write' }) // nested: no unit needed
+  await spawn($, 'Help the writer', { subagentType: 'workflow-subagent', workflow: { runId: 'wf_1', agentIndex: 1 } }) // a workflow agent: no unit needed, marked ungated
   await work($, w, 'Gone worker')
   await complete($, 'agent-gone', 'answer')
   await $.turn.start({ text: 'go', turnId: 't', agentId: 'agent-write' })
@@ -807,7 +829,7 @@ test('the pane: the flow module with its props on the terminal, the still flow o
   expect(flow.workers[2]!.status).toBe('done')
   expect(flow.plan).toEqual({ title: 'PLAN · executing · wave 1', done: 1, total: 2, counts: 'running 2  failed 0  queued 0' }) // U1 and Gone worker's unit
   expect(flow.delegate).toBe('delegate to workers · Sonnet 5.5')
-  expect(flow.workers[1]).toEqual(expect.objectContaining({ tier: 'sonnet', warn: true, model: 'Sonnet 5.5 · no audit' })) // nested: no unit
+  expect(flow.workers[1]).toEqual(expect.objectContaining({ tier: 'sonnet', warn: true, model: 'Sonnet 5.5 · ungated: workflow' })) // a workflow agent: no unit
   expect(flow.leads).toEqual([]) // no Haiku worker: no leads row
   expect(flow.leadsLabel).toBe('')
   expect(flow.feed).toBe('')
@@ -831,7 +853,7 @@ test('the pane: the flow module with its props on the terminal, the still flow o
   // pressing a still card selects it, as a post from the flow module does
   await ui.press({ key: 'card-agent-help' })
   expect(w.ui?.selected).toBe('agent-help')
-  expect((await ui.find({ key: 'detail' }))?.text).toMatch(/↳ Write the state module/)
+  expect((await ui.find({ key: 'detail' }))?.text).toMatch(/ungated \(workflow\): no unit, tier or audit line was checked/)
   await ui.press({ key: 'card-agent-help' })
   expect(w.ui?.selected).toBeNull()
   await ui.unmount()
@@ -1381,7 +1403,7 @@ test('a covered spawn of each tier goes through, its card in its row with its ti
   expect(logOf(w).entries.filter(e => e.text.startsWith('spawn refused'))).toEqual([])
 })
 
-test('workflow agents, resumes, nested spawns and statusline-setup pass the gate with no unit; a fork is refused', async ($, on) => {
+test('workflow agents, resumes and statusline-setup pass the gate with no unit, marked ungated; nested spawns with no unit and forks are refused', async ($, on) => {
   const w = world()
   engine(on, w)
   await start($)
@@ -1389,16 +1411,30 @@ test('workflow agents, resumes, nested spawns and statusline-setup pass the gate
   expect(await spawn($, 'Forked run', { subagentType: 'fork', fork: true })).toEqual({ deny: denyFork() })
   expect(w.spawnCalls).toBe(0)
   expect(logOf(w).entries.map(e => e.text)).toEqual(['spawn refused: Forked run'])
+  // 0.11.0: a nested fork is refused too, and a nested spawn is held to the same units (N3)
+  expect(await spawn($, 'Nested fork', { subagentType: 'fork', fork: true, parentAgentId: 'agent-x' })).toEqual({ deny: denyFork() })
+  expect(await spawn($, 'Nested run', { subagentType: 'general-purpose', parentAgentId: 'agent-forked' })).toEqual({ deny: denyBuiltinNested('general-purpose') })
+  expect(await spawn($, 'Nested helper', { parentAgentId: 'agent-forked' })).toEqual({ deny: denyNested(null) })
+  expect(w.spawnCalls).toBe(0)
   const passed = [
-    await spawn($, 'Nested fork', { subagentType: 'fork', fork: true, parentAgentId: 'agent-x' }), // nested forks keep passing (rule 1)
     await spawn($, 'Workflow run', { subagentType: 'general-purpose', workflow: { runId: 'wf_1', agentIndex: 1 } }),
     await spawn($, 'Resumed run', { subagentType: 'Explore', resume: { agentId: 'agent-resumed' } }),
-    await spawn($, 'Nested run', { subagentType: 'general-purpose', parentAgentId: 'agent-forked' }),
     await spawn($, 'Statusline run', { subagentType: 'statusline-setup' }),
   ]
   for (const r of passed as any[]) expect(r.deny).toBeUndefined()
-  expect(w.spawnCalls).toBe(5)
-  expect(logOf(w).entries.filter(e => e.text.startsWith('spawn refused'))).toHaveLength(1)
+  expect(w.spawnCalls).toBe(3)
+  // each passes marked ungated, linked to no unit
+  const b = boardOf(w)
+  expect(boxOf(b, 'agent-workflow').ungated).toEqual({ why: 'workflow', run: 'wf_1' })
+  expect(boxOf(b, 'agent-resumed').ungated).toEqual({ why: 'resumed' })
+  expect(boxOf(b, 'agent-statusline').ungated).toEqual({ why: 'exempt' })
+  const texts = logOf(w).entries.map(e => e.text)
+  expect(texts.filter(t => t.startsWith('spawn refused'))).toEqual(['spawn refused: Forked run', 'spawn refused: Nested fork', 'spawn refused: Nested run', 'spawn refused: Nested helper'])
+  expect(texts.filter(t => t.startsWith('ungated: '))).toEqual([
+    'ungated: workflow run wf_1: its agents start unchecked',
+    'ungated: resumed run of an agent no unit covered',
+    'ungated: exempt type statusline-setup',
+  ])
 })
 
 test('the gate fails open: an error inside it lets the spawn through', async ($, on) => {
@@ -1474,15 +1510,17 @@ test('a covered spawn appends one line to the session\'s audit file; two leave t
   expect(auditWrites(w).map(x => x.path)).toEqual([AUDIT_FILE, AUDIT_FILE])
 })
 
-test('an uncovered spawn the gate lets through, and a refused one, append nothing', async ($, on) => {
+test('an uncovered spawn the gate lets through, and a refused one, append no unit line (an ungated one gets its !ungated line)', async ($, on) => {
   const w = world()
   engine(on, w)
   await start($)
   await spawn($, 'Forked run', { subagentType: 'fork', fork: true })
   await spawn($, 'Statusline run', { subagentType: 'statusline-setup' })
-  await spawn($, 'Nested run', { parentAgentId: 'agent-forked' })
+  await spawn($, 'Nested run', { parentAgentId: 'agent-forked' }) // refused (0.11.0: nested spawns are gated)
   await spawn($, 'Refused run', { name: 'x1' })
-  expect(w.fsWrites).toEqual([]) // nothing at all: no audit line, no journal entry (no tiered unit covers any)
+  // no unit line and no journal entry (no tiered unit covers any); the exempt agent's !ungated line only (0.11.0)
+  expect(w.fsWrites.map(x => x.path)).toEqual([AUDIT_FILE])
+  expect(w.files[AUDIT_FILE]).toBe(`${new Date(T0).toISOString()} | !ungated | agent-statusline | exempt | statusline-setup | ${SONNET} | Statusline run\n`)
 })
 
 test('the audit file falls back to USERPROFILE, then to the mod\'s own folder', async ($, on) => {
@@ -1520,14 +1558,14 @@ test('an audit file that cannot be written never breaks the spawn', async ($, on
 
 // ---------------------------------------------------------------- the tracked line
 
-test('the tool\'s tracked line marks the tier, NO AUDIT, TIER MISMATCH and the barred kinds', async ($, on) => {
+test('the tool\'s tracked line marks the tier, UNGATED, TIER MISMATCH and the barred kinds', async ($, on) => {
   const w = world()
   engine(on, w)
   await start($)
   await declare($, w, [unit('h1', 'haiku'), unit('s1'), unit('s2')])
   await spawn($, 'Find call sites', { name: 'h1', subagentType: workerType('haiku') })
   await spawn($, 'Write the module', { name: 's1' })
-  await spawn($, 'Nested helper', { parentAgentId: 'agent-write' })
+  await spawn($, 'Nested helper', { subagentType: 'workflow-subagent', workflow: { runId: 'wf_1', agentIndex: 1 } }) // a workflow agent: no unit
   w.spawnModel = HAIKU // the engine puts s2's sonnet worker on Haiku
   await spawn($, 'Mismatched run', { name: 's2' })
   w.spawnModel = null
@@ -1540,7 +1578,7 @@ test('the tool\'s tracked line marks the tier, NO AUDIT, TIER MISMATCH and the b
   expect(r.result).toContain(' | tracked workers: ')
   expect(r.result).toContain('Find call sites [starting, haiku, unit h1, no tokens]')
   expect(r.result).toContain('Write the module [starting, sonnet, unit s1, no tokens]')
-  expect(r.result).toContain('Nested helper [starting, sonnet, NO AUDIT, no tokens]')
+  expect(r.result).toContain('Nested helper [starting, sonnet, UNGATED workflow, no tokens]') // 0.11.0: in place of NO AUDIT for an agent the gate passed with no unit
   expect(r.result).toContain('Mismatched run [starting, haiku, TIER MISMATCH, unit s2, no tokens]')
   expect(r.result).toMatch(/ \| barred: haiku locate, sonnet tests$/)
 })
@@ -1793,9 +1831,9 @@ test('the journal: an uncovered spawn writes no entry', async ($, on) => {
   await start($)
   await declare($, w, [unit('s1')])
   const before = Object.keys(w.files).length
-  await spawn($, 'Nested helper', { parentAgentId: 'agent-x' })
+  await spawn($, 'Nested helper', { parentAgentId: 'agent-x' }) // refused (0.11.0)
   await spawn($, 'Statusline run', { subagentType: 'statusline-setup' })
-  expect(Object.keys(w.files)).toHaveLength(before)
+  expect(Object.keys(w.files).filter(p => p !== AUDIT_FILE)).toHaveLength(before) // the audit file holds its !ungated line (0.11.0)
 })
 
 test('the journal: two sessions\' shards merge into one index (J1); this session writes only its own shard', async ($, on) => {
@@ -1908,6 +1946,9 @@ test('context: a resolution that throws fails open: the spawn goes through with 
   await declare($, w, [unit('s1', 'sonnet', { context: ['/docs/unreadable.md'] })])
   expect(await spawn($, 'Write the module', { name: 's1', prompt: 'Build it.' })).toEqual({ model: SONNET, agentId: 'agent-write' })
   expect(w.spawned[0].prompt).toBe('Build it.')
+  // 0.11.0: the failure is counted as a context check
+  expect(gateOf(w)).toEqual(expect.objectContaining({ checkFailures: 1, recordFailures: 0 }))
+  expect(gateOf(w).last).toEqual(expect.objectContaining({ where: 'context check', outcome: 'started unchecked' }))
 })
 
 // ---------------------------------------------------------------- 0.7.0: cwd (B2, P1 yes)
@@ -1923,13 +1964,16 @@ test('cwd: a covered spawn runs in the task\'s repository when it differs from t
   // a cwd the call gives is kept
   await spawn($, 'Test the module', { name: 's2', cwd: '/work/given' })
   expect(w.spawned[1].cwd).toBe('/work/given')
-  // a task in the session's root: no cwd; an uncovered (nested) spawn: none either
+  // a task in the session's root: no cwd; a spawn no unit covers (a workflow agent): none either
   await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, taskId: 'home', task: 'Here', units: [unit('s3')] } as any)
   await spawn($, 'Fix the module', { name: 's3' })
   expect(w.spawned[2].cwd).toBeUndefined()
-  await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, taskId: 'ext' } as any)
-  await spawn($, 'Nested helper', { parentAgentId: 'agent-write' })
+  await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, taskId: 'ext', units: [unit('s1'), unit('s2'), unit('s4')] } as any)
+  await spawn($, 'Nested helper', { subagentType: 'workflow-subagent', workflow: { runId: 'wf_1', agentIndex: 1 } })
   expect(w.spawned[3].cwd).toBeUndefined()
+  // 0.11.0: a nested spawn a unit covers is gated as a main-loop one, and runs in the task's repository too
+  await spawn($, 'Check the module', { name: 's4', parentAgentId: 'agent-write' })
+  expect(w.spawned[4].cwd).toBe('/work/other')
 })
 
 // ---------------------------------------------------------------- 0.7.1: the repository's CLAUDE.md (P2 no)
@@ -2032,4 +2076,411 @@ test('an entry whose brief, messages and results hold section lines reads back w
   }
   const name = entryName(T0, 'u-2', 'agent-abcdef12')
   expect(entryFromText(buildEntry(name, data).text)).toEqual(data)
+})
+
+// ---------------------------------------------------------------- 0.11.0: gate health and ungated agents
+
+/** The pane's status line on the terminal. */
+async function statusLine($: any): Promise<string> {
+  const ui: any = await $.ui.mount({ plugin: 'flowestra', component: 'Pane', requestId: 'flowestra', surface: 'terminal', props: PANE_PROPS(96) })
+  const text = String((await ui.find({ key: 'status' }))?.text ?? '')
+  await ui.unmount()
+  return text
+}
+
+/** The `!gate-error` lines of the audit file. */
+function gateErrorLines(w: World): string[] {
+  return (w.files[AUDIT_FILE] ?? '').split('\n').filter(l => l.includes(' | !gate-error | '))
+}
+
+test('gate health: a spawn check that fails starts the spawn, counts it, logs it, writes !gate-error, tells once; the status line and the answer show it', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  expect(await statusLine($)).not.toMatch(/gate/) // healthy: no gate part
+  w.corruptBoard = true
+  expect(await spawn($, 'Find call sites', { name: 'x1' })).toEqual({ model: SONNET, agentId: 'agent-find' })
+  const g1 = gateOf(w)
+  expect(g1).toEqual(expect.objectContaining({ checkFailures: 1, recordFailures: 0 }))
+  expect(g1.last).toEqual(expect.objectContaining({ where: 'spawn check', outcome: 'started unchecked', at: T0 }))
+  const err = g1.last!.error
+  expect(err.length).toBeGreaterThan(0)
+  expect(logOf(w).entries.map(e => e.text)).toContain(`gate failed: spawn check (${err.slice(0, 60)}) · x1 started unchecked`)
+  expect(gateErrorLines(w)).toEqual([`${new Date(T0).toISOString()} | !gate-error | agent-find | spawn check | started unchecked | ${err}`])
+  expect(w.uiLogs).toEqual([gateNotice(g1.last!, AUDIT_FILE, false)])
+  // a second failing spawn: counted, no second notice
+  await spawn($, 'Map the callers', { name: 'x2' })
+  expect(gateOf(w).checkFailures).toBe(2)
+  expect(w.uiLogs).toHaveLength(1)
+  expect(gateErrorLines(w)).toHaveLength(2)
+  w.corruptBoard = false
+  expect(await statusLine($)).toMatch(/^gate \[degraded · 2 failed\]/)
+  // the first update opens a task (its state block): the gate line is the last line
+  const opened: any = await declare($, w, [unit('s1')])
+  expect(String(opened.result).split('\n').at(-1)).toBe(gateAnswerLine(gateOf(w), T0, AUDIT_FILE))
+  // a later one-line answer becomes two lines
+  const r: any = await declare($, w, [unit('s2')])
+  const lines = String(r.result).split('\n')
+  expect(lines).toHaveLength(2)
+  expect(lines[0]).toMatch(/^board updated/)
+  expect(lines[1]).toBe(gateAnswerLine(gateOf(w), T0, AUDIT_FILE))
+  expect(lines[1]).toMatch(/^gate degraded: 2 check failures since the mod loaded/)
+})
+
+test('gate health: with the spawn check failing, the fallback check still refuses a model the worker may not run on', { options: { opusWorkers: false } }, async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  w.corruptBoard = true
+  expect(await spawn($, 'Draft the design', { name: 'o1', subagentType: workerType('opus'), model: 'opus' })).toEqual({ deny: denyModelOverride('opus', 'sonnet', 'opus') })
+  expect(w.spawnCalls).toBe(0)
+  const g = gateOf(w)
+  expect(g.checkFailures).toBe(1)
+  expect(g.last).toEqual(expect.objectContaining({ where: 'spawn check', outcome: 'refused (fallback check)' }))
+  expect(logOf(w).entries.map(e => e.text)).toEqual([`gate failed: spawn check (${g.last!.error.slice(0, 60)}) · o1 refused (fallback check)`, 'spawn refused: o1'])
+  expect(gateErrorLines(w)).toEqual([`${new Date(T0).toISOString()} | !gate-error | - | spawn check | refused (fallback check) | ${g.last!.error}`])
+  // a plain spawn of the same worker passes the fallback check and starts unchecked
+  w.spawnModel = SONNET
+  expect(await spawn($, 'Draft the plan', { name: 'o2', subagentType: workerType('opus') })).toEqual({ model: SONNET, agentId: 'agent-draft' })
+  expect(gateOf(w).last?.outcome).toBe('started unchecked')
+})
+
+test('gate health: strict mode refuses a spawn the gate could not check', { options: { gateOnError: 'refuse' } }, async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  w.corruptBoard = true
+  const r: any = await spawn($, 'Find call sites', { name: 'x1' })
+  const g = gateOf(w)
+  expect(r).toEqual({ deny: strictRefusal('spawn check', g.last!.error) })
+  expect(w.spawnCalls).toBe(0)
+  expect(g.last).toEqual(expect.objectContaining({ where: 'spawn check', outcome: 'refused (strict)' }))
+  expect(w.uiLogs).toEqual([gateNotice(g.last!, AUDIT_FILE, true)])
+  expect(gateErrorLines(w)).toEqual([`${new Date(T0).toISOString()} | !gate-error | - | spawn check | refused (strict) | ${g.last!.error}`])
+  // a workflow agent is refused too when its check fails
+  expect((await spawn($, 'Workflow run', { subagentType: 'workflow-subagent', workflow: { runId: 'wf_1', agentIndex: 1 } }) as any).deny).toMatch(/^Spawn refused: the Agent Board's gate could not check this spawn/)
+  expect(w.spawnCalls).toBe(0)
+})
+
+test('gate health: a spec check that fails starts the spawn and is counted', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1', 'sonnet', { spec: '/nowhere/spec.md' })])
+  w.failExists = true
+  expect(await spawn($, 'Build from spec', { name: 's1' })).toEqual({ model: SONNET, agentId: 'agent-build' })
+  expect(gateOf(w).checkFailures).toBe(1)
+  expect(gateOf(w).last).toEqual(expect.objectContaining({ where: 'spec check', outcome: 'started unchecked' }))
+  expect(gateErrorLines(w)).toHaveLength(1)
+  expect(w.files[AUDIT_FILE]).toContain(` | s1 | agent-build | ${AUDIT.sonnet}\n`) // the checked spawn's own line too
+})
+
+test('gate health: strict mode refuses a spawn whose spec check fails', { options: { gateOnError: 'refuse' } }, async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1', 'sonnet', { spec: '/nowhere/spec.md' })])
+  w.failExists = true
+  const r: any = await spawn($, 'Build from spec', { name: 's1' })
+  expect(r).toEqual({ deny: strictRefusal('spec check', gateOf(w).last!.error) })
+  expect(w.spawnCalls).toBe(0)
+})
+
+/** A spawn input the engine never sends (`workflow: null`, with no run id to read): the spawn hook throws before next. */
+const THROWING_SPAWN = { workflow: null }
+
+test('gate health: a spawn hook that throws before next lets the spawn start, counted as spawn hook', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  const r: any = await spawn($, 'Write the module', { name: 's1', ...THROWING_SPAWN })
+  expect(r).toEqual({ model: SONNET, agentId: 'agent-write' })
+  expect(w.spawnCalls).toBe(1)
+  const g = gateOf(w)
+  expect(g.checkFailures).toBe(1)
+  expect(g.last).toEqual(expect.objectContaining({ where: 'spawn hook', outcome: 'started unchecked' }))
+  expect(g.last!.error.length).toBeGreaterThan(0)
+  expect(logOf(w).entries.map(e => e.text)).toContain(`gate failed: spawn hook (${g.last!.error.slice(0, 60)}) · s1 started unchecked`)
+  expect(w.uiLogs).toEqual([gateNotice(g.last!, AUDIT_FILE, false)])
+})
+
+test('gate health: strict mode refuses a spawn whose hook throws before next', { options: { gateOnError: 'refuse' } }, async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  const r: any = await spawn($, 'Write the module', { name: 's1', ...THROWING_SPAWN })
+  expect(r).toEqual({ deny: strictRefusal('spawn hook', gateOf(w).last!.error) })
+  expect(w.spawnCalls).toBe(0)
+  expect(gateOf(w).last?.outcome).toBe('refused (strict)')
+})
+
+test('ungated: a workflow agent starts, marked, linked to no unit; one !ungated line, no unit line, no journal entry; the tracked line says UNGATED', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1', 'sonnet', { label: 'Do s1' })])
+  const r: any = await spawn($, 'Do s1', { subagentType: 'workflow-subagent', model: 'haiku', workflow: { runId: 'wf_1', agentIndex: 1 } })
+  expect(r).toEqual({ model: HAIKU, agentId: 'agent-do' })
+  const box = boxOf(boardOf(w), 'agent-do')
+  expect(box.ungated).toEqual({ why: 'workflow', run: 'wf_1' })
+  expect(box.unitId).toBeNull()
+  expect(box.routed).toBeNull()
+  expect(w.files[AUDIT_FILE]).toBe(`${new Date(T0).toISOString()} | !ungated | agent-do | workflow wf_1 | workflow-subagent | ${HAIKU} | Do s1\n`)
+  expect(Object.keys(w.files).filter(p => p.includes('/unset/'))).toEqual([]) // no journal entry
+  const answer: any = await declare($, w, [])
+  expect(answer.result).toContain('Do s1 [starting, haiku, UNGATED workflow')
+  const again: any = await declare($, w, [unit('s1', 'sonnet', { label: 'Do s1' })])
+  const line = String(again.result).split('\n').find((l: string) => l.includes('Do s1 [')) ?? ''
+  expect(line).toContain('UNGATED workflow')
+  expect(line).not.toContain('unit s1')
+})
+
+test('resumes: a resumed worker of a rejected unit is refused; a resume of an unknown agent starts marked resumed', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1')])
+  await spawn($, 'Write the module', { name: 's1' })
+  await declare($, w, [unit('s1', 'sonnet', { verdict: 'rejected' })])
+  const before = w.spawnCalls
+  expect(await spawn($, 'Write the module', { name: 's1', resume: { agentId: 'agent-write' } })).toEqual({ deny: denyResumeRejected('s1') })
+  expect(w.spawnCalls).toBe(before)
+  expect(await spawn($, 'Resumed run', { resume: { agentId: 'agent-resumed' } })).toEqual({ model: SONNET, agentId: 'agent-resumed' })
+  expect(boxOf(boardOf(w), 'agent-resumed').ungated).toEqual({ why: 'resumed' })
+  expect(w.files[AUDIT_FILE]!.split('\n').filter(l => l.includes(' | !ungated | '))).toEqual([
+    `${new Date(T0).toISOString()} | !ungated | agent-resumed | resumed | ${workerType('sonnet')} | ${SONNET} | Resumed run`,
+  ])
+})
+
+test('nested spawns: one no unit covers is refused; a tier worker named for a declared unit starts with its context inlined and an audit line', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  expect(await spawn($, 'Nested helper', { parentAgentId: 'agent-x' })).toEqual({ deny: denyNested(null) })
+  expect(await spawn($, 'Nested helper', { name: 'n1', parentAgentId: 'agent-x' })).toEqual({ deny: denyNested('n1') })
+  w.files['/docs/a.md'] = 'alpha'
+  await declare($, w, [unit('s1', 'sonnet', { context: ['/docs/a.md'] })])
+  expect(await spawn($, 'Write the module', { name: 's1', parentAgentId: 'agent-x', prompt: 'Build it.' })).toEqual({ model: SONNET, agentId: 'agent-write' })
+  expect(w.spawned.at(-1).prompt).toBe('Build it.\n\nContext (inlined by the Agent Board from /docs/a.md):\nalpha')
+  expect(w.files[AUDIT_FILE]).toBe(`${new Date(T0).toISOString()} | s1 | agent-write | ${AUDIT.sonnet}\n`)
+  expect(boxOf(boardOf(w), 'agent-write').ungated).toBeNull()
+})
+
+test('gate health: session start clears it; /clear does not', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  w.corruptBoard = true
+  await spawn($, 'Find call sites', { name: 'x1' })
+  w.corruptBoard = false
+  expect(gateOf(w).checkFailures).toBe(1)
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as any)
+  expect(gateOf(w).checkFailures).toBe(1)
+  expect(await statusLine($)).toMatch(/^gate \[degraded · 1 failed\]/)
+  await start($)
+  expect(gateOf(w)).toEqual({ checkFailures: 0, recordFailures: 0, last: null, since: T0 })
+  expect(await statusLine($)).not.toMatch(/gate/)
+})
+
+// ---------------------------------------------------------------- 0.11.0: the journal file layer, masking, storing less
+
+// A fake credential, assembled from parts so no credential-shaped text sits in this file.
+const FAKE_KEY = 'AKIA' + 'ABCDEFGHIJKLMNOP'
+
+test('masking: a brief and a result holding a credential are journaled masked; the worker receives the brief as written; the audit-file line is masked', async ($, on) => {
+  const w = world()
+  const clock = engine(on, w)
+  await start($)
+  const audit = `write the module for ${FAKE_KEY} | sonnet | §1 step 3: one repo, written criteria | the tests the brief names`
+  await declare($, w, [unit('s1', 'sonnet', { audit })])
+  await spawn($, 'Write the module', { name: 's1', prompt: `Deploy with key ${FAKE_KEY} now.` })
+  expect(w.spawned[0].prompt).toBe(`Deploy with key ${FAKE_KEY} now.`)
+  const path = `${TASK1}/unset/${entryName(T0, 's1', 'agent-write')}.md`
+  expect(w.files[path]).toContain('\n## Brief\nDeploy with key [redacted:aws-key] now.\n')
+  expect(w.files[path]!.split('\n## Brief\n')[1]).not.toContain(FAKE_KEY) // the header's audit field is outside storedEntryData's reach
+  expect(w.files[AUDIT_FILE]).toContain(' | s1 | agent-write | write the module for [redacted:aws-key] | sonnet |')
+  expect(w.files[AUDIT_FILE]).not.toContain(FAKE_KEY)
+  // a result holding one is masked as well
+  await clock.advance(1000)
+  await complete($, 'agent-write', 'answer', `used ${FAKE_KEY}`)
+  expect(w.files[path]).toContain('\n## Result\nused [redacted:aws-key]')
+  expect(w.files[path]!.split('\n## Brief\n')[1]).not.toContain(FAKE_KEY)
+})
+
+test('masking off: the brief and the audit line are stored as written', { options: { journalMasking: false } }, async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  const audit = `write the module for ${FAKE_KEY} | sonnet | §1 step 3: one repo, written criteria | the tests the brief names`
+  await declare($, w, [unit('s1', 'sonnet', { audit })])
+  await spawn($, 'Write the module', { name: 's1', prompt: `Deploy with key ${FAKE_KEY} now.` })
+  expect(w.spawned[0].prompt).toBe(`Deploy with key ${FAKE_KEY} now.`)
+  expect(w.files[`${TASK1}/unset/${entryName(T0, 's1', 'agent-write')}.md`]).toContain(`\n## Brief\nDeploy with key ${FAKE_KEY} now.\n`)
+  expect(w.files[AUDIT_FILE]).toContain(` | s1 | agent-write | write the module for ${FAKE_KEY} | sonnet |`)
+})
+
+test('journalContent index: the entry holds the placeholder; a later unit naming it as context gets its header and the placeholder', { options: { journalContent: 'index' } }, async ($, on) => {
+  const w = world()
+  const clock = engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1')])
+  await spawn($, 'One try', { name: 's1', prompt: 'the whole brief' })
+  expect(w.spawned[0].prompt).toBe('the whole brief')
+  await complete($, 'agent-one', 'answer', 'the whole answer')
+  const path = `${TASK1}/unset/${entryName(T0, 's1', 'agent-one')}.md`
+  expect(w.files[path]).toContain(`\n## Brief\n${NOT_STORED}\n## Result\n${NOT_STORED}`)
+  expect(w.files[path]).not.toContain('the whole')
+  await clock.advance(1000)
+  await declare($, w, [unit('s3', 'sonnet', { context: ['task-1:s1'] })])
+  await spawn($, 'Use the result', { name: 's3', prompt: 'Go on.' })
+  const prompt: string = w.spawned[1].prompt
+  expect(prompt).toContain(`Context (inlined by the Agent Board from ${path}):\n# task-1 · s1 · Do s1\n`)
+  expect(prompt).toContain(`\n## Result\n${NOT_STORED}`)
+  expect(prompt).not.toContain('the whole answer')
+})
+
+test('state files: state.bak.json is written with the same text as state.json, before it', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1')], { phase: 'design' })
+  expect(w.files[`${TASK1}/state.bak.json`]).toBe(w.files[`${TASK1}/state.json`])
+  const paths = w.fsWrites.map(x => x.path)
+  const bak = paths.lastIndexOf(`${TASK1}/state.bak.json`)
+  expect(bak).toBeGreaterThan(paths.lastIndexOf(`${TASK1}/state.md`))
+  expect(bak).toBeLessThan(paths.lastIndexOf(`${TASK1}/state.json`))
+})
+
+const OLD_STATE = () =>
+  stateJson({
+    slot: { taskId: 'old-task', task: 'Old work', repo: '/work/main', phase: 'review', wave: 3, status: 'closed', activeAt: T0 - 9_000_000, units: [fullUnit('s1', { verdict: 'accepted' })] } as any,
+    sessionId: 'sess-older-1', updatedMs: T0 - 2 * 3_600_000, unitStates: {}, latestEntries: {}, recentEntries: [],
+  })
+
+test('state files: a torn state.json with a readable backup resumes the task from the backup (F1)', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  const dir = `${JOURNAL}/${MAIN_KEY}/old-task`
+  w.files[`${dir}/state.json`] = OLD_STATE().slice(0, 60)
+  w.files[`${dir}/state.bak.json`] = OLD_STATE()
+  await start($)
+  const r: any = await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, taskId: 'old-task' } as any)
+  expect(r.deny).toBeUndefined()
+  expect(r.result.split('\n')[1]).toBe('task old-task · open · Old work')
+  expect(boardOf(w).units.map(u => [u.id, u.verdict])).toEqual([['s1', 'accepted']])
+  expect(parseStateJson(w.files[`${dir}/state.json`]!)?.status).toBe('open') // rewritten whole
+})
+
+test('state files: both copies unreadable: the refusal names the file; a task line opens it afresh and keeps the unreadable text beside it (F1)', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  const dir = `${JOURNAL}/${MAIN_KEY}/old-task`
+  const torn = OLD_STATE().slice(0, 60)
+  w.files[`${dir}/state.json`] = torn
+  w.files[`${dir}/state.bak.json`] = OLD_STATE().slice(0, 30)
+  await start($)
+  const before = boardOf(w)
+  const r: any = await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, taskId: 'old-task' } as any)
+  expect(r.deny).toBe(`task "old-task" has a state file that cannot be read (${dir}/state.json): give its task line to open it afresh; the unreadable file is kept beside it.`)
+  expect(boardOf(w)).toEqual(before)
+  expect(Object.keys(w.files).some(p => p.includes('state.unreadable-'))).toBe(false) // a refusal writes nothing
+  const opened: any = await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, taskId: 'old-task', task: 'Fresh start' } as any)
+  expect(opened.deny).toBeUndefined()
+  const kept = stateUnreadablePath(JOURNAL, MAIN_KEY, 'old-task', T0)
+  expect(kept).toBe(`${dir}/state.unreadable-20231114-221320.json`)
+  expect(w.files[kept]).toBe(torn)
+  const paths = w.fsWrites.map(x => x.path)
+  expect(paths.indexOf(kept)).toBeLessThan(paths.indexOf(`${dir}/state.json`)) // kept before the new task's first write
+  expect(parseStateJson(w.files[`${dir}/state.json`]!)).toMatchObject({ taskId: 'old-task', task: 'Fresh start' })
+})
+
+test('entries by file (F2): an entry whose shard line is lost is still found as context, and its completion is journaled (probe R2)', async ($, on) => {
+  const w = world()
+  const clock = engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1')])
+  await spawn($, 'One try', { name: 's1', prompt: 'first brief' })
+  const folder = `${TASK1}/unset`
+  const path = `${folder}/${entryName(T0, 's1', 'agent-one')}.md`
+  delete w.files[`${folder}/.shards/${SESSION}.tsv`] // the line is lost (a torn or lost shard write)
+  expect(w.files[path]).toBeDefined()
+  await clock.advance(1000)
+  await declare($, w, [unit('s3', 'sonnet', { context: ['task-1:s1'] })])
+  const r: any = await spawn($, 'Use the result', { name: 's3', prompt: 'Go on.' })
+  expect(r.deny).toBeUndefined()
+  expect(w.spawned[1].prompt).toContain(`Context (inlined by the Agent Board from ${path}):\n# task-1 · s1 · Do s1\n`)
+  await complete($, 'agent-one', 'answer', 'first answer')
+  expect(w.files[path]).toContain('\n## Result\nfirst answer')
+  expect(w.files[path]).toContain(' · status: done\n')
+  expect(w.files[`${folder}/index.md`]).toContain(`${entryName(T0, 's1', 'agent-one')}.md | s1 | sonnet | implement | done |`) // the index heals
+})
+
+test('entries by file (F2): a verdict on another session\'s entry with no shard line rebuilds its line from the file', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('s9', 'opus', { kind: 'design' })], { phase: 'executing' })
+  const folder = `${TASK1}/executing`
+  const name = entryName(T0 - 5000, 's9', 'agent-other-1')
+  const data: any = {
+    taskId: 'task-1', unitId: 's9', label: 'Do s9', audit: AUDIT.opus, tier: 'opus', kind: 'design', phase: 'executing', wave: 1,
+    agentId: 'agent-other-1', subagentType: workerType('opus'), model: OPUS, sessionId: 'sess-other', cwd: '/work/main', context: [],
+    spawnedMs: T0 - 5000, endedMs: T0 - 1000, status: 'done', verdict: null, verdictMs: null, brief: 'their brief', result: 'their result', resumes: [],
+  }
+  const text = buildEntry(name, data).text
+  w.files[`${folder}/${name}.md`] = text // no shard of any session names it
+  await declare($, w, [unit('s9', 'opus', { kind: 'design', verdict: 'accepted' })])
+  expect(w.files[`${folder}/${name}.md`]).toBe(text) // never written by this session
+  const expected = phaseLineOfData(`${name}.md`, { ...data, verdict: 'accepted' })
+  expect(w.files[`${folder}/.shards/${SESSION}.tsv`]).toContain(`\t${name}.md\t${expected}`)
+  expect(w.files[`${folder}/index.md`]).toContain(`\n${expected}\n`)
+  expect(w.files[`${TASK1}/index.md`]).toContain('\nexecuting | 1 | 1/0/0 |')
+})
+
+test('result parts: a result over the split size is written to its part files before the entry that names them (F4)', async ($, on) => {
+  const w = world()
+  const clock = engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1')])
+  await spawn($, 'Write the module', { name: 's1', prompt: 'Build it.' })
+  const path = `${TASK1}/unset/${entryName(T0, 's1', 'agent-write')}.md`
+  const mark = w.fsWrites.length
+  await clock.advance(1000)
+  await complete($, 'agent-write', 'answer', 'y'.repeat(4 * 1024 * 1024))
+  const paths = w.fsWrites.slice(mark).map(x => x.path)
+  const parts = paths.filter(p => /\.result(\.\d+)?\.md$/.test(p))
+  expect(parts.length).toBeGreaterThan(0)
+  for (const p of parts) expect(paths.indexOf(p)).toBeLessThan(paths.indexOf(path))
+  expect(w.files[path]).toContain('results: stored beside this file')
+})
+
+// ---------------------------------------------------------------- 0.11.0: /journal
+
+test('/journal is registered at session start; with no arguments it answers the status text', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  expect(w.commands.map(c => c.name)).toEqual(['board', 'journal'])
+  expect(w.commands.find(c => c.name === 'journal')).toMatchObject({ description: COMMAND_DESCRIPTION, argumentHint: COMMAND_ARGUMENT_HINT })
+  const r: any = await $.command.run({ command: 'journal', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as any)
+  expect(r.text).toBe(statusText({ journalRoot: JOURNAL, nowMs: T0, tasks: [], audits: [], masking: true, content: 'full' }))
+})
+
+test('/journal prune ... confirm from an origin that is not the person\'s keystroke deletes nothing and answers the keystroke text', async ($, on) => {
+  const w = world()
+  const runs: string[][] = []
+  on('process.run', (_: any, e: any) => {
+    runs.push(e.argv ?? e)
+    return { value: { exitCode: 0, stdout: '', stderr: '' } } as any
+  })
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1')])
+  const before = { ...w.files }
+  for (const origin of [{ kind: 'plugin', name: 'other' }, { kind: 'sdk' }]) {
+    const r: any = await $.command.run({ command: 'journal', args: 'prune 30 confirm abcdef', origin, presentation: { isFullscreen: true, columns: 160 } } as any)
+    expect(r.text).toBe(refusedText('origin', '30', 'abcdef'))
+  }
+  expect(runs).toEqual([])
+  expect(w.files).toEqual(before)
 })

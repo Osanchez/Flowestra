@@ -1,6 +1,6 @@
 {
   "name": "flowestra",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Orchestrate Claude Code work across model tiers: a live Agent Board of your Opus, Sonnet and Haiku workers, a routing policy with a gate that enforces it, tasks across repositories, and a work journal on disk of every delegation.",
   "types": "./types/index.d.ts",
   "author": {
@@ -35,6 +35,26 @@
       "title": "Haiku workers",
       "description": "On: Haiku-tier work (read-only lookups) runs on Haiku. Off: it runs on Sonnet, or on Opus if Sonnet is off too, with the same read-only tools. The main session's model is never changed.",
       "default": true
+    },
+    "gateOnError": {
+      "type": "string",
+      "title": "When the gate fails",
+      "description": "allow (default): if a check of the spawn gate fails with an error, the spawn starts unchecked, and the board, the session log and the audit file say so. refuse: the spawn is refused instead. With refuse, a fault in Flowestra stops every delegation until it is fixed or this is set back to allow.",
+      "default": "allow",
+      "options": ["allow", "refuse"]
+    },
+    "journalMasking": {
+      "type": "boolean",
+      "title": "Mask secrets in the journal",
+      "description": "On: before a brief, message, result or audit line is written to the journal or the audit file, text that looks like a credential (a private key block; an AWS, GitHub, Slack, Stripe, npm, Google or API key or token; a JWT; an Authorization header; a password in a URL or in an assignment such as PASSWORD=...) is replaced by [redacted:<kind>]. Best effort: a secret in any other form is stored as written. Workers always receive their brief unmasked.",
+      "default": true
+    },
+    "journalContent": {
+      "type": "string",
+      "title": "Journal content",
+      "description": "full: every brief and result is stored whole. capped: each brief, message and result keeps its first 4,000 and last 2,000 characters. index: no brief or result is stored, only each entry's header and its index line; a unit whose context names a journal entry then receives that header only.",
+      "default": "full",
+      "options": ["full", "capped", "index"]
     }
   }
 }
