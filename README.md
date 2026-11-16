@@ -20,15 +20,15 @@ Flowestra is a Claude Code mod. It gives the main session a routing policy for c
 
 ## Token cost, measured
 
-Measured on fresh sessions (Flowestra 0.16.0, Opus 5.5 lead, 3 runs per cell, median):
+Measured on 12 fresh sessions (Flowestra 0.16.0, Opus 5.5 lead, 3 runs per cell, median):
 
 | Task | Without Flowestra | With 0.16.0 | Difference (total) | Opus tokens |
 |---|---:|---:|---:|---:|
 | Small: one fix | 1.00M tokens | 0.83M tokens | −17% | −35% |
 | Larger: three fixes | 3.47M tokens | 2.88M tokens | −17% | −61% |
-| Fixed cost per request | | | +8.7k tokens, mostly cached | |
+| Fixed cost per request | | | +8.9k tokens, mostly cached | |
 
-Delegation now happens on its own: in all 6 runs the work went to a worker, usually one Sonnet unit, and the lead made no file edits. The Opus share fell, the tests passed in every run, and on the larger task total output rose 18% and wall-clock 12%. The sample is small (3 runs per cell), and on the small task the total-input ranges overlap. The earlier 0.15.0 results (the lead never delegated) and the forced-delegation test (3.2× the tokens in 0.12.0) are in the benchmark document.
+Delegation happens on its own: in all 6 runs the work went to a worker, usually one Sonnet unit, and the lead made no file edits. The Opus share fell and the tests passed in every run. On the larger task, total output rose 18% and wall-clock 12%. The sample is small (3 runs per cell), and on the small task the total-input ranges overlap.
 
 **[Full benchmark: method, every run, benefits, limitations and when it's worth it →](docs/BENCHMARK.md)**
 
