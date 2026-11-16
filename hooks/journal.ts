@@ -657,14 +657,20 @@ const headingOf = (line: string): { level: number; text: string } | null => {
 /**
  * `path#heading`: the first heading whose text equals `heading` (leading `#`s and
  * case ignored), up to the next heading of the same or a higher level (fenced code
- * is skipped). Null when there is no such heading.
+ * is skipped). A heading whose text starts with a date (`YYYY-MM-DD`, a decisions.md
+ * entry) runs to the next dated heading of the same level, or any higher-level heading, so
+ * an entry's own inner headings do not cut it short (0.14.0). Null when there is no
+ * such heading.
  */
+const DATED_HEADING = /^\d{4}-\d{2}-\d{2}\b/
+
 export function headingSection(text: string, heading: string): string | null {
   const want = heading.replace(/^#+\s*/, '').trim().toLowerCase()
   const lines = text.split('\n')
   let fence = false
   let start = -1
   let level = 0
+  let dated = false
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? ''
     if (/^\s*(```|~~~)/.test(line)) {
@@ -678,8 +684,9 @@ export function headingSection(text: string, heading: string): string | null {
       if (h.text.trim().toLowerCase() === want) {
         start = i
         level = h.level
+        dated = DATED_HEADING.test(h.text)
       }
-    } else if (h.level <= level) {
+    } else if (h.level < level || (h.level === level && (!dated || DATED_HEADING.test(h.text)))) {
       return lines.slice(start, i).join('\n').replace(/\s+$/, '')
     }
   }

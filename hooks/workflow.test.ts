@@ -20,10 +20,22 @@ describe('the texts', () => {
   })
 
   test('word counts', () => {
-    expect(words(workflowText('light'))).toBeGreaterThanOrEqual(170)
-    expect(words(workflowText('light'))).toBeLessThanOrEqual(210)
-    expect(words(workflowText('full'))).toBeGreaterThanOrEqual(780)
-    expect(words(workflowText('full'))).toBeLessThanOrEqual(870)
+    expect(words(workflowText('light'))).toBeGreaterThanOrEqual(300)
+    expect(words(workflowText('light'))).toBeLessThanOrEqual(340)
+    expect(words(workflowText('full'))).toBeGreaterThanOrEqual(980)
+    expect(words(workflowText('full'))).toBeLessThanOrEqual(1050)
+  })
+
+  test('0.14.0: the delegation rule is in both texts; the design worker and briefs are scaled to the task', () => {
+    for (const mode of ['light', 'full'] as const) {
+      expect(workflowText(mode)).toContain('**When to delegate.**')
+      expect(workflowText(mode)).toContain('- **Do it yourself** when the work fits in about ten tool calls')
+      expect(workflowText(mode)).toContain('- When in doubt on a small task, do it; when in doubt on a large one, delegate.')
+    }
+    expect(WORKFLOW_STEPS_TEXT).toContain('otherwise the orchestrator drafts it itself, to the same standard')
+    expect(WORKFLOW_STEPS_TEXT).toContain('each unit at its own section and the sections it lists as inputs')
+    expect(WORKFLOW_STEPS_TEXT).toContain('by workers or by the orchestrator as the delegation rule above decides')
+    expect(WORKFLOW_STEPS_TEXT).not.toContain('**Small designs.**')
   })
 
   test('no trailing newline', () => {

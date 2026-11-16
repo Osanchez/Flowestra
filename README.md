@@ -30,6 +30,8 @@ Flowestra is a Claude Code mod. It gives the main session a routing policy for c
 
 Each tier's model can be switched off (see "Choose worker models" below); the tier's work then runs on another model, with the same tools and return format.
 
+**Delegating only where it pays.** Every worker starts cold and spends tokens on top of the orchestrator's own: on a small task, the 0.12.0 measurements found that delegating added the workers' tokens without reducing the lead's. So the workflow tells the orchestrator to do work itself when it fits in about ten tool calls or one or two files, and to delegate when work splits into parallel units, needs a lot of reading it does not need to keep, or is bulk mechanical work. Designs go to an Opus worker only when they need code the orchestrator has not read. Worker returns are kept to about 250 words: the detail is in the diff and the journal.
+
 **A routing policy, in one place.** The mod adds a Model Routing Policy to the orchestrator's instructions: a procedure to run for every delegation (any Opus trigger? does the Haiku gate hold? does the Sonnet gate hold? otherwise Opus), what each tier's brief must state, what each tier returns, and how failures escalate upward. Its text lives in `hooks/policy.ts` and nowhere else.
 
 **A gate that enforces it.** Before a worker starts, the board checks that a declared unit of work covers it, with a tier, a task type and an audit line of four parts: the task, the tier, the routing step that selected it, and what will catch an error. A worker with no such unit is refused. So are:
@@ -102,7 +104,7 @@ Installing the mod gives the main session the routing policy, the workers, the g
 
    | Value | What the main session gets |
    |---|---|
-   | `full` (default) | The orchestrator role and the whole workflow: frame, design by an Opus worker, design review, your approval before anything is built, the approved spec written to `.flowestra/decisions.md`, execution in waves, test, review |
+   | `full` (default) | The orchestrator role and the whole workflow: frame, design (by an Opus worker when it needs code the orchestrator has not read), design review, your approval before anything is built, the approved spec written to `.flowestra/decisions.md`, execution in waves, test, review |
    | `light` | The orchestrator role only: delegate to the tier workers, brief them, review what comes back. No approval gate and no decisions file |
    | `off` | Only the routing policy and the board instructions, for a workflow you write yourself in your own `CLAUDE.md` |
 

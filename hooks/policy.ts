@@ -121,11 +121,12 @@ Haiku:
 Sonnet:
   STATUS: COMPLETE | PARTIAL | BLOCKED
   CHANGES: files touched, one line each on what changed
-  CHECKS_RUN: command + verbatim result for each
-  CLAIMS: each finding or conclusion with a path:line citation
-  ASSUMPTIONS: anything decided that the brief didn't specify
+  CHECKS_RUN: command + its summary line; verbatim lines only for failures
+  CLAIMS: at most 8, what the orchestrator must decide or verify, each with path:line
+  ASSUMPTIONS: anything decided that the brief didn't specify, one line each
   UNCERTAIN / OUT_OF_SCOPE_SEEN
-Opus: same as Sonnet, plus ALTERNATIVES_REJECTED for design work.
+  About 250 words in all; never restate the brief or paste whole outputs.
+Opus: same as Sonnet, plus ALTERNATIVES_REJECTED for design work; a design's detail goes in its draft file.
 
 ## 7. Using worker output
 - Haiku results are leads. Read the cited source before deciding anything, and

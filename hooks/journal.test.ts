@@ -334,6 +334,15 @@ describe('extraction rules', () => {
     expect(headingSection(DOC, 'Top')).toBe('# Top\ntop body')
     expect(headingSection(DOC, 'Missing')).toBeNull()
   })
+  test('0.14.0: a dated heading (a decisions entry) runs to the next dated heading, past its own inner headings', () => {
+    const doc = ['# Decisions', '## 2026-11-16 · New', 'intro', '## 1. Inner', 'inner body', '### U1 · Unit', 'unit body', '---', '## 2026-11-15 · Old', 'old body', '## Inner of old', 'x'].join('\n')
+    expect(headingSection(doc, '2026-11-16 · New')).toBe('## 2026-11-16 · New\nintro\n## 1. Inner\ninner body\n### U1 · Unit\nunit body\n---')
+    expect(headingSection(doc, '2026-11-15 · Old')).toBe('## 2026-11-15 · Old\nold body\n## Inner of old\nx')
+    expect(headingSection(doc, 'U1 · Unit')).toBe('### U1 · Unit\nunit body\n---')
+    expect(headingSection(doc, '1. Inner')).toBe('## 1. Inner\ninner body\n### U1 · Unit\nunit body\n---')
+    const higher = ['## 2026-11-16 · New', 'a', '## inner', 'b', '# Appendix', 'c'].join('\n')
+    expect(headingSection(higher, '2026-11-16 · New')).toBe('## 2026-11-16 · New\na\n## inner\nb')
+  })
   test('a journal entry gives its header and Result, not Brief or Message', () => {
     const { text } = buildEntry('e1', data({ brief: 'SECRET BRIEF', resumes: [{ message: 'SECRET MSG', result: 'second' }] }))
     const got = entryContext(text)

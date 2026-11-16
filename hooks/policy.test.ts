@@ -102,7 +102,7 @@ describe('the policy text', () => {
     expect(ROUTING_POLICY_TEXT).toContain('\n<task> | <tier> | <§1 step and conditions that selected it> | <what catches an error>\n')
     expect(ROUTING_POLICY_TEXT.endsWith(last)).toBe(true)
     expect(ROUTING_POLICY_TEXT.endsWith('\n')).toBe(false)
-    expect(ROUTING_POLICY_TEXT.split('\n').length).toBe(89)
+    expect(ROUTING_POLICY_TEXT.split('\n').length).toBe(90)
   })
   test('Haiku is read-only: no execute or edit task, METHOD_USED names searches and reads', () => {
     expect(ROUTING_POLICY_TEXT).not.toContain('EXECUTE & REPORT')
@@ -122,14 +122,17 @@ describe('the slices', () => {
   })
   test('SONNET_SCHEMA: the Sonnet lines of §6, unindented', () => {
     expect(SONNET_SCHEMA.startsWith('STATUS: COMPLETE | PARTIAL | BLOCKED\n')).toBe(true)
-    expect(SONNET_SCHEMA.endsWith('\nUNCERTAIN / OUT_OF_SCOPE_SEEN')).toBe(true)
-    expect(SONNET_SCHEMA.split('\n').length).toBe(6)
-    expect(SONNET_SCHEMA).toContain('\nASSUMPTIONS: anything decided that the brief didn\'t specify\n')
+    expect(SONNET_SCHEMA.endsWith('\nAbout 250 words in all; never restate the brief or paste whole outputs.')).toBe(true)
+    expect(SONNET_SCHEMA.split('\n').length).toBe(7)
+    expect(SONNET_SCHEMA).toContain('\nCHECKS_RUN: command + its summary line; verbatim lines only for failures\n')
+    expect(SONNET_SCHEMA).toContain('\nCLAIMS: at most 8, what the orchestrator must decide or verify, each with path:line\n')
+    expect(SONNET_SCHEMA).toContain('\nASSUMPTIONS: anything decided that the brief didn\'t specify, one line each\n')
+    expect(SONNET_SCHEMA).toContain('\nUNCERTAIN / OUT_OF_SCOPE_SEEN\n')
     expect(SONNET_SCHEMA).not.toContain('Opus')
     expect(SONNET_SCHEMA.split('\n').every(line => !line.startsWith(' '))).toBe(true)
   })
   test('OPUS_SCHEMA_NOTE: the whole Opus line', () => {
-    expect(OPUS_SCHEMA_NOTE).toBe('Opus: same as Sonnet, plus ALTERNATIVES_REJECTED for design work.')
+    expect(OPUS_SCHEMA_NOTE).toBe("Opus: same as Sonnet, plus ALTERNATIVES_REJECTED for design work; a design's detail goes in its draft file.")
   })
   test('BLOCKED_RULE: the §5 sentence, whitespace collapsed', () => {
     expect(BLOCKED_RULE).toBe(
