@@ -103,7 +103,7 @@ describe('the note', () => {
 
   test('sonnet off', () => {
     expect(modelsNote(modelsFromOptions({ sonnetWorkers: false }))).toBe(
-      'Worker models: Sonnet is switched off in the Flowestra settings, so sonnet-tier work runs on Opus. Routing is unchanged: run §1, declare the tier it selects and spawn that tier\'s worker with no model parameter; only the model that runs a tier changes, and the board shows both. Escalation (§8) still goes by tier. Where the tier above runs on the same model, escalating changes the brief, tools and return schema but not the model: when a task fails there too, resolve it yourself or ask the user instead of re-routing it again.',
+      'Worker models: Sonnet is switched off in the Flowestra settings, so sonnet-tier work runs on Opus. Implementation that the Sonnet tier would carry is done by you as declared units, not by an Opus-run worker; other Sonnet-tier work (reviews, summaries, exploration) still runs on Opus. Routing is unchanged: run §1, declare the tier it selects and spawn that tier\'s worker with no model parameter; only the model that runs a tier changes, and the board shows both. Escalation (§8) still goes by tier. Where the tier above runs on the same model, escalating changes the brief, tools and return schema but not the model: when a task fails there too, resolve it yourself or ask the user instead of re-routing it again.',
     )
   })
 
@@ -121,8 +121,17 @@ describe('the note', () => {
 
   test('sonnet and haiku off', () => {
     expect(modelsNote(modelsFromOptions({ sonnetWorkers: false, haikuWorkers: false }))).toBe(
-      'Worker models: Sonnet and Haiku are switched off in the Flowestra settings, so sonnet-tier work runs on Opus, and haiku-tier work runs on Opus. Routing is unchanged: run §1, declare the tier it selects and spawn that tier\'s worker with no model parameter; only the model that runs a tier changes, and the board shows both. Escalation (§8) still goes by tier. Where the tier above runs on the same model, escalating changes the brief, tools and return schema but not the model: when a task fails there too, resolve it yourself or ask the user instead of re-routing it again.',
+      'Worker models: Sonnet and Haiku are switched off in the Flowestra settings, so sonnet-tier work runs on Opus, and haiku-tier work runs on Opus. Implementation that the Sonnet tier would carry is done by you as declared units, not by an Opus-run worker; other Sonnet-tier work (reviews, summaries, exploration) still runs on Opus. Routing is unchanged: run §1, declare the tier it selects and spawn that tier\'s worker with no model parameter; only the model that runs a tier changes, and the board shows both. Escalation (§8) still goes by tier. Where the tier above runs on the same model, escalating changes the brief, tools and return schema but not the model: when a task fails there too, resolve it yourself or ask the user instead of re-routing it again.',
     )
+  })
+
+  test('0.16.0: the implementation sentence names the model that runs Sonnet-tier work', () => {
+    const sentence = 'Implementation that the Sonnet tier would carry is done by you as declared units, not by an Opus-run worker;'
+    expect(modelsNote(modelsFromOptions({ sonnetWorkers: false }))).toContain(sentence)
+    expect(modelsNote(modelsFromOptions({ sonnetWorkers: false, haikuWorkers: false }))).toContain(sentence)
+    expect(modelsNote(modelsFromOptions({ opusWorkers: false }))).not.toContain('Implementation that')
+    expect(modelsNote(modelsFromOptions({ opusWorkers: false, sonnetWorkers: false }))).not.toContain('Implementation that')
+    expect(modelsNote(ALL_ON)).toBe('')
   })
 
   test('opus and sonnet off', () => {

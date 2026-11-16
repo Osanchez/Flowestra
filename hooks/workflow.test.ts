@@ -20,21 +20,24 @@ describe('the texts', () => {
   })
 
   test('word counts', () => {
-    expect(words(workflowText('light'))).toBeGreaterThanOrEqual(300)
-    expect(words(workflowText('light'))).toBeLessThanOrEqual(340)
-    expect(words(workflowText('full'))).toBeGreaterThanOrEqual(980)
-    expect(words(workflowText('full'))).toBeLessThanOrEqual(1050)
+    expect(words(workflowText('light'))).toBeGreaterThanOrEqual(370)
+    expect(words(workflowText('light'))).toBeLessThanOrEqual(410)
+    expect(words(workflowText('full'))).toBeGreaterThanOrEqual(1040)
+    expect(words(workflowText('full'))).toBeLessThanOrEqual(1130)
   })
 
-  test('0.14.0: the delegation rule is in both texts; the design worker and briefs are scaled to the task', () => {
+  test('0.16.0: who writes is in both texts; the design worker and briefs are scaled to the task', () => {
     for (const mode of ['light', 'full'] as const) {
-      expect(workflowText(mode)).toContain('**When to delegate.**')
-      expect(workflowText(mode)).toContain('- **Do it yourself** when the work fits in about ten tool calls')
-      expect(workflowText(mode)).toContain('- When in doubt on a small task, do it; when in doubt on a large one, delegate.')
+      expect(workflowText(mode)).toContain('**Who writes.**')
+      expect(workflowText(mode)).toContain('- **Every change to the project\'s files** (code, tests, docs, config) goes to a worker')
+      expect(workflowText(mode)).toContain('- **Task size decides how, not whether.**')
+      expect(workflowText(mode)).toContain('- **Exception:** when no writing worker is available')
+      expect(workflowText(mode)).not.toContain('Do it yourself')
+      expect(workflowText(mode)).not.toContain('When to delegate')
     }
     expect(WORKFLOW_STEPS_TEXT).toContain('otherwise the orchestrator drafts it itself, to the same standard')
     expect(WORKFLOW_STEPS_TEXT).toContain('each unit at its own section and the sections it lists as inputs')
-    expect(WORKFLOW_STEPS_TEXT).toContain('by workers or by the orchestrator as the delegation rule above decides')
+    expect(WORKFLOW_STEPS_TEXT).toContain('Implementation units are carried out by workers in waves (by the orchestrator only under the exception above).')
     expect(WORKFLOW_STEPS_TEXT).not.toContain('**Small designs.**')
   })
 

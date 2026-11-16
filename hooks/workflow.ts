@@ -19,11 +19,12 @@ export const WORKFLOW_ROLE_TEXT = [
   '- **Briefs.** Each worker gets a self-contained brief. Workers cannot see the orchestrator\'s context, so briefs must not assume it. What a brief states, and what each tier returns, are set by the Model Routing Policy.',
   '- **Projects.** A project\'s own CLAUDE.md adds what is specific to it, such as shared resources or steps of its own, and those apply too. It may send a kind of work to a higher tier than the routing policy would. It never sends work to a lower one.',
   '',
-  '**When to delegate.** Every worker starts cold and costs tokens on top of the orchestrator\'s own, so delegate only where it pays:',
+  '**Who writes.** You plan and review; workers write.',
   '',
-  '- **Do it yourself** when the work fits in about ten tool calls, touches one or two files in one area, or briefing it would take about as long as doing it. Self-carried work is still a board unit (declared) and still gets your final review.',
-  '- **Delegate** when the work splits into units that can genuinely run in parallel, when a unit needs a lot of reading you do not need to keep in your own context, or when bulk mechanical work (searching, extracting, fix-until-green loops) would otherwise take many of your turns.',
-  '- When in doubt on a small task, do it; when in doubt on a large one, delegate.',
+  '- **You keep** the framing, the reading the design needs, the spec and its entry in the decisions file, the routing, the reviews, running the checks, and the final review.',
+  '- **Every change to the project\'s files** (code, tests, docs, config) goes to a worker under the routing policy: the Sonnet tier for specified work, which is the usual case, and the Opus tier where an Opus trigger applies, for example security or migrations. Fixes found in review go back to a worker as well.',
+  '- **Task size decides how, not whether.** For a **small** task (one area, one or two files), draft the spec yourself and give the whole implementation, tests included, to **one** Sonnet unit, with no scouting and no design worker. For a **larger** task, split the units by the files they own, run units that write different files in parallel, use Haiku for bulk locating, and use an Opus design worker when the design needs code you have not read.',
+  '- **Exception:** when no writing worker is available (the Sonnet switch is off, so no Sonnet worker can run), you carry the implementation yourself as a declared unit and do not send it to an Opus-run worker.',
 ].join('\n')
 
 export const WORKFLOW_STEPS_TEXT = [
@@ -41,7 +42,7 @@ export const WORKFLOW_STEPS_TEXT = [
   '3. **Design review.** The orchestrator challenges the recommendation and spot-checks the citations the choice depends on. When it has concerns it sends the draft back to be re-evaluated and updated. It approves or returns the design; it does not rewrite it.',
   '4. **Approval gate.** The orchestrator presents the spec and its own recommendation to the user. No implementation worker is spawned until the user approves it.',
   '5. **Spec to disk.** The approved design is added as a dated entry to `.flowestra/decisions.md` at the project root (created if there is none), with `###` or deeper headings inside it, and implementation briefs point at that entry: each unit at its own section and the sections it lists as inputs, rather than the whole entry. No implementation starts before its approved spec is on disk.',
-  '6. **Execution.** Units are carried out in waves, by workers or by the orchestrator as the delegation rule above decides. Units with no shared files or dependencies run at the same time. Dependent units wait for their prerequisites to finish.',
+  '6. **Execution.** Implementation units are carried out by workers in waves (by the orchestrator only under the exception above). Units with no shared files or dependencies run at the same time. Dependent units wait for their prerequisites to finish.',
   '7. **Integration and test.** The orchestrator waits for **all** workers in a wave to complete before integrating or running tests. Nothing is tested against partial work.',
   '8. **Review.** The orchestrator reviews the result against the spec\'s acceptance criteria and sends fixes back to workers as needed.',
   '',
