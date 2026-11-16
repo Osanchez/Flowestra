@@ -206,7 +206,7 @@ describe('shards and indexes', () => {
     const tomb = tombstoneLine('t9', 500)
     const shard = repoShard([shardLine(500, 't9', tomb), shardLine(400, 't1', 't1 | open | x')])
     for (const level of ['repo', 'root'] as const) {
-      const { $, w } = fake({ '/f/.shards/s.tsv': shard })
+      const { $, w } = fake({ '/f/.shards/s.tsv': shard, '/f/t1/state.md': 'x', '/f/t9/state.md': 'x' })
       const lines = await regenIndex($, '/f', level, 'n', 1000)
       expect(lines).toEqual(['t1 | open | x'])
       expect(w.files['/f/index.md']).not.toContain('pruned')
@@ -215,6 +215,24 @@ describe('shards and indexes', () => {
     const lines = await regenIndex($, '/f', 'phase', 'n', 1000)
     expect(lines).toEqual(['t1 | open | x', tomb].sort())
     expect(w.files['/f/index.md']).toContain('pruned')
+  })
+
+  test('regenIndex at root and repo level keeps only lines whose child folder exists', async () => {
+    const shard = repoShard([shardLine(1, 'a', 'a | one'), shardLine(2, 'gone', 'gone | two'), shardLine(3, 'b', 'b | three')])
+    for (const level of ['root', 'repo'] as const) {
+      const { $, w } = fake({ '/f/.shards/s.tsv': shard, '/f/a/x.md': 'x', '/f/b/x.md': 'x' })
+      const lines = await regenIndex($, '/f', level, 'n', 1000)
+      expect(lines).toEqual(['a | one', 'b | three'])
+      expect(w.files['/f/index.md']).toContain('a | one')
+      expect(w.files['/f/index.md']).not.toContain('gone')
+      expect(w.files['/f/.shards/s.tsv']).toBe(shard)
+    }
+  })
+
+  test('regenIndex at phase level keeps lines whose keys are not folders', async () => {
+    const shard = repoShard([shardLine(1, 'u1', 'u1 | one'), shardLine(2, 'u2', 'u2 | two')])
+    const { $ } = fake({ '/f/.shards/s.tsv': shard })
+    expect(await regenIndex($, '/f', 'phase', 'n', 1000)).toEqual(['u1 | one', 'u2 | two'])
   })
 
   test('regenIndex regenerates once more when a shard changed meanwhile', async () => {

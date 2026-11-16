@@ -137,13 +137,16 @@ export async function readShards($: EngineInterface, folder: string): Promise<{ 
  * Regenerates a folder's index.md from its shards (J1): merge, write; then list
  * the shards again and regenerate once more when one is newer than when it was
  * read (or new). Returns the merged lines. At the repo and root levels the
- * tombstone lines of pruned tasks are dropped first (never at the phase level,
+ * tombstone lines of pruned tasks are dropped first, then any line whose child key is not a folder under `folder` (never at the phase level,
  * where a line's second field is a unit id).
  */
 export async function regenIndex($: EngineInterface, folder: string, level: IndexLevel, name: string, at: number): Promise<string[]> {
   const merged = async () => {
     const got = await readShards($, folder)
-    const lines = level === 'repo' || level === 'root' ? dropPruned(got.lines) : got.lines
+    if (level !== 'repo' && level !== 'root') return { lines: got.lines, seen: got.seen }
+    // A line stays only while its child key names a folder here: a folder deleted by hand must not come back from the shards.
+    const dirs = new Set((await listOrNone($, folder)).filter(f => f.kind === 'dir' && !f.name.startsWith('.')).map(f => f.name))
+    const lines = dropPruned(got.lines).filter(l => dirs.has(l.split(' | ')[0] ?? ''))
     return { lines, seen: got.seen }
   }
   let got = await merged()
