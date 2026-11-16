@@ -1,0 +1,92 @@
+{
+  "version": "1",
+  "endpoints": [
+    {"method": "GET", "path": "/items", "query": ["offset", "limit"], "request": null, "response": "ItemList"},
+    {"method": "POST", "path": "/items", "request": "NewItem", "response": "Item"},
+    {"method": "GET", "path": "/items/{id}", "request": null, "response": "Item"},
+    {"method": "GET", "path": "/stock/{item_id}", "request": null, "response": "Stock"},
+    {"method": "PUT", "path": "/stock/{item_id}", "request": "StockUpdate", "response": "Stock"},
+    {"method": "GET", "path": "/orders", "query": ["offset", "limit"], "request": null, "response": "OrderList"},
+    {"method": "POST", "path": "/orders", "request": "NewOrder", "response": "Order"},
+    {"method": "GET", "path": "/orders/{id}", "request": null, "response": "Order"},
+    {"method": "POST", "path": "/orders/{id}/cancel", "request": null, "response": "Order"}
+  ],
+  "schemas": {
+    "Item": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "sku": {"type": "string"},
+        "name": {"type": "string"},
+        "price_cents": {"type": "integer", "minimum": 0}
+      },
+      "required": ["id", "sku", "name", "price_cents"],
+      "additionalProperties": false
+    },
+    "NewItem": {
+      "type": "object",
+      "properties": {
+        "sku": {"type": "string"},
+        "name": {"type": "string"},
+        "price_cents": {"type": "integer", "minimum": 0}
+      },
+      "required": ["sku", "name", "price_cents"],
+      "additionalProperties": false
+    },
+    "Stock": {
+      "type": "object",
+      "properties": {
+        "item_id": {"type": "integer"},
+        "qty": {"type": "integer", "minimum": 0}
+      },
+      "required": ["item_id", "qty"],
+      "additionalProperties": false
+    },
+    "StockUpdate": {
+      "type": "object",
+      "properties": {
+        "qty": {"type": "integer", "minimum": 0}
+      },
+      "required": ["qty"],
+      "additionalProperties": false
+    },
+    "Order": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "item_id": {"type": "integer"},
+        "qty": {"type": "integer", "minimum": 1},
+        "status": {"type": "string", "enum": ["open", "cancelled"]}
+      },
+      "required": ["id", "item_id", "qty", "status"],
+      "additionalProperties": false
+    },
+    "NewOrder": {
+      "type": "object",
+      "properties": {
+        "item_id": {"type": "integer"},
+        "qty": {"type": "integer", "minimum": 1}
+      },
+      "required": ["item_id", "qty"],
+      "additionalProperties": false
+    },
+    "ItemList": {
+      "type": "object",
+      "properties": {
+        "items": {"type": "array", "items": {"schema": "Item"}},
+        "total": {"type": "integer", "minimum": 0}
+      },
+      "required": ["items", "total"],
+      "additionalProperties": false
+    },
+    "OrderList": {
+      "type": "object",
+      "properties": {
+        "orders": {"type": "array", "items": {"schema": "Order"}},
+        "total": {"type": "integer", "minimum": 0}
+      },
+      "required": ["orders", "total"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "items": [
+    {"id": 1, "sku": "WID-001", "name": "Widget", "price_cents": 1250},
+    {"id": 2, "sku": "WID-002", "name": "Gadget", "price_cents": 990}
+  ],
+  "total": 2
+}

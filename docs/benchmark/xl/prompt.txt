@@ -1,0 +1,27 @@
+You are working in a folder that holds three git repositories of one small system: contract/ (the API contract: api.json, a schema checker check.py, example payloads), service/ (an HTTP + sqlite3 orders service, package orders_service) and client/ (a Python client library and CLI, package orders_client). Python 3.9, standard library only. Each repository's tests run with `python3 -m unittest discover -s tests` from that repository's root. The service starts with `python3 -m orders_service --port <n> --db <path>` and prints `listening on <port>`; keep that start-up interface unchanged.
+
+The change below is already specified and approved by the owner. Proceed through implementation without asking for confirmation; nobody is available to answer questions. Do not commit. You are done when the change is implemented in all three repositories, covered by new tests in each, and every repository's test suite passes.
+
+## Change: contract version 2
+
+### 1. Cursor pagination
+GET /items and GET /orders take `limit` (integer 1-100, default 20) and `cursor` (an opaque string taken from a previous response). The response is `{"items": [...], "next_cursor": <string or null>}` (`"orders"` for orders); `offset` and `total` are removed. Results are ordered by id ascending; `next_cursor` is null on the last page. An unparseable cursor gives 400 `invalid_cursor`; a `limit` out of range or not an integer gives 400 `validation_error`. In the contract, `ItemPage` and `OrderPage` replace `ItemList` and `OrderList`.
+Client: `list_items(limit=20, cursor=None)` and `list_orders(limit=20, cursor=None)` return the page as decoded JSON; new generators `iter_items(limit=20)` and `iter_orders(limit=20)` yield every item or order, following cursors. CLI: `items list` and `orders list` take `--limit` and `--cursor`, and `--all` prints every record as one JSON list.
+
+### 2. One error envelope
+Every non-2xx response from the service has a JSON body `{"error": {"code": <string>, "message": <string>, "details": <object>}}`. Codes and statuses: `not_found` 404 (unknown id or route), `validation_error` 400, `invalid_cursor` 400, `insufficient_stock` 409, `invalid_state` 409 (cancelling an order that is not open), `idempotency_conflict` 409, `unavailable` 503. The contract gets an `Error` schema for this envelope.
+Client: a module `orders_client.errors` with `ApiError(status, code, message, details)` and subclasses `NotFound`, `ValidationError`, `InvalidCursor`, `InsufficientStock`, `InvalidState`, `IdempotencyConflict`, `Unavailable`, raised by code (an unknown code raises `ApiError`). `orders_client.ApiError` stays importable and is the same class.
+
+### 3. Idempotent order creation
+POST /orders accepts an `Idempotency-Key` header (1-64 characters). A repeat with the same key and an equal JSON body returns the same status and body as the first response and creates nothing (stock is not decremented again). The same key with a different body gives 409 `idempotency_conflict`. Requests without the header behave as before. Keys are kept for the life of the database.
+Client: `create_order(item_id, quantity, idempotency_key=None)` sends the given key or a new uuid4. On a 503 response it retries with the same key, up to 3 attempts in all, waiting `retry_base_delay * 2**attempt` seconds between them (`Client(base_url, timeout=5, retry_base_delay=0.2)`), then raises `Unavailable`.
+
+### 4. `qty` becomes `quantity`
+Stock and order objects carry `quantity` instead of `qty` in every response. Requests take `quantity`; `qty` is still accepted as a deprecated alias for this version (if both are given and differ: 400 `validation_error`). Client: `set_stock(item_id, quantity)` and `create_order(item_id, quantity, ...)`. The contract's `version` becomes "2" and documents `qty` as a deprecated input alias.
+
+### Acceptance
+- The contract: `version` is "2"; schemas `Item`, `Stock`, `Order`, `ItemPage`, `OrderPage` and `Error` describe the v2 payloads; examples for each validate with `python3 check.py`.
+- Real service responses validate against those schemas (the service's contract test covers this).
+- The client's integration test against the real service covers pagination, an error mapped to its exception, idempotent replay, and `quantity`.
+- New tests in each repository; a `CHANGELOG.md` entry headed `2.0.0` in each repository.
+- Every repository's test suite passes.
