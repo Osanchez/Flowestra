@@ -183,8 +183,9 @@ export { entryFromText } from './journal'
 import {
   answerBoardCall,
   BOARD_USAGE_TEXT,
-  REPORT_DONE_TEXT,
-  REPORT_FAILED_TEXT,
+  TOKENS_FAILED_TEXT,
+  TOKENS_SHOWN_TEXT,
+  TOKENS_WAITING_TEXT,
   boardCommandText,
   registerBoardCommand,
   registerBoardTool,
@@ -192,7 +193,8 @@ import {
   wantsBoardSection,
   withFlowestraSections,
 } from './board'
-import { injectedParts, usageReport } from './report'
+import { injectedParts } from './report'
+import type { Injected } from './report'
 import { modelsFromOptions, modelsNote } from './models'
 import { workflowMode } from './workflow'
 import type { BoardToggleResult, BoardUpdate } from './board'
@@ -245,8 +247,11 @@ import {
   emptyDetail,
   emptyUi,
   selectCard,
+  selectScope,
+  selectTab,
 } from './detail'
 import { LOG_SHAPE, emptyLog, logDiff, logPush } from './log'
+import { drawTokens } from './tokens'
 import { drawBand, drawPane, flowProps } from './view'
 import type { ViewModel } from './view'
 import { registerWorkers, tierOfWorkerType } from './workers'
@@ -482,6 +487,14 @@ async function toggleBoard($: EngineInterface): Promise<BoardToggleResult> {
     return 'closed'
   }
   return (await openPane($)) ? 'opened' : 'waiting'
+}
+
+/** `/board tokens`: the Tokens tab is selected, then the pane is opened unless it already is. */
+async function showTokens($: EngineInterface): Promise<string> {
+  await update($, uiAtom, u => selectTab(u, 'tokens'))
+  const state = await paneIsOpen($)
+  if (state.open) return state.placed ? TOKENS_SHOWN_TEXT : TOKENS_WAITING_TEXT
+  return (await openPane($)) ? TOKENS_SHOWN_TEXT : TOKENS_WAITING_TEXT
 }
 
 type SpawnSeen = {
@@ -1540,7 +1553,13 @@ async function baseModel($: EngineInterface, width: number, height: number | nul
 }
 
 /** The pane's model: reads (and so redraws on) detail, ui and the log as well. */
-async function paneModel($: EngineInterface, width: number, height: number | null): Promise<ViewModel> {
+async function paneModel(
+  $: EngineInterface,
+  width: number,
+  height: number | null,
+  placement: 'dock' | 'inline' | 'widget' | undefined,
+  injected: Injected[],
+): Promise<ViewModel> {
   const base = await baseModel($, width, height)
   const detail = await read($, detailAtom)
   const ui = await read($, uiAtom)
@@ -1553,6 +1572,14 @@ async function paneModel($: EngineInterface, width: number, height: number | nul
     onSelect: id => {
       pressCard($, id).catch(() => undefined)
     },
+    onTab: tab => {
+      update($, uiAtom, u => selectTab(u, tab)).catch(() => undefined)
+    },
+    onScope: scope => {
+      update($, uiAtom, u => selectScope(u, scope)).catch(() => undefined)
+    },
+    placement,
+    injected,
   }
 }
 
@@ -1885,17 +1912,15 @@ export const register: Register = (on, options) => {
     return closed
   })
 
-  // `/board` toggles the pane; `/board tokens` writes the token report as dim lines (not sent to the model).
+  // `/board` toggles the pane; `/board tokens` opens it on the Tokens tab (and leaves it open if it already is).
   on('command.run', { command: 'board' }, async ($, e) => {
     const arg = String(e.args ?? '').trim().toLowerCase()
     if (arg === '') return { text: boardCommandText(await toggleBoard($)) }
     if (arg !== 'tokens') return { text: BOARD_USAGE_TEXT }
-    const lines = usageReport(await read($, boardAtom), injectedParts(mode, modelsNote(models)))
-    for (const line of lines) await $.ui.log(line)
-    return { text: REPORT_DONE_TEXT }
+    return { text: await showTokens($) }
   }).catch(($, e) => {
     const arg = String(e.args ?? '').trim().toLowerCase()
-    return { text: arg === 'tokens' ? REPORT_FAILED_TEXT : 'Agent Board: the pane could not be opened or closed.' }
+    return { text: arg === 'tokens' ? TOKENS_FAILED_TEXT : 'Agent Board: the pane could not be opened or closed.' }
   })
 
   // `/journal` (upkeep.ts): status, prune, check. The event's args and origin go
@@ -1915,7 +1940,14 @@ export const register: Register = (on, options) => {
   // 'agent-flow' (what `e.element` carries at ui.message); the module path
   // must stay a string literal: the engine reads it off this source.
   on('ui.render', { component: 'Pane', requestId: 'flowestra' }, async ($, e) => {
-    const vm = await paneModel($, e.props.bodyColumns, e.props.scroll.bodyRows)
+    let injected: Injected[]
+    try {
+      injected = injectedParts(mode, modelsNote(models))
+    } catch {
+      injected = []
+    }
+    const vm = await paneModel($, e.props.bodyColumns, e.props.scroll.bodyRows, e.props.placement, injected)
+    if (vm.placement !== 'widget' && (vm.ui.tab ?? 'board') === 'tokens') return drawTokens($.ui.resolve(e), vm)
     if (e.surface === 'terminal') {
       const { Client } = $.ui.resolve(e)
       const flow = <Client key="agent-flow" module="./flow.client.tsx" props={flowProps(vm)} width={vm.width} />

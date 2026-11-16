@@ -2,8 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import type { AgentBox, Board, Detail, FlowProps, GateHealth, Live, Log, RowCard, Tier, Ui } from '../types'
 import { gateAnswerLine, gateNotice, strictRefusal } from './gate'
-import { BOARD_COMMAND_DESCRIPTION, BOARD_COMMAND_HINT, BOARD_PROMPT_SECTION, BOARD_TOOL_FULL_NAME, BOARD_USAGE_TEXT, POLICY_SECTION_ID, REPORT_DONE_TEXT, REPORT_FAILED_TEXT } from './board'
-import { injectedParts, usageReport } from './report'
+import { BOARD_COMMAND_DESCRIPTION, BOARD_COMMAND_HINT, BOARD_PROMPT_SECTION, BOARD_TOOL_FULL_NAME, BOARD_USAGE_TEXT, POLICY_SECTION_ID, TOKENS_SHOWN_TEXT, TOKENS_WAITING_TEXT } from './board'
 import { WORKFLOW_SECTION_ID, workflowText } from './workflow'
 import { modelsFromOptions, modelsNote } from './models'
 import {
@@ -73,6 +72,7 @@ type World = {
   spawnCalls: number // spawns that reached the engine
   spawnModel: string | null // what a spawn runs on; null: what the call asks for
   oldLive: boolean
+  uiOld: boolean // the stored ui value is of the earlier shape (ui-2): no tab, no scope
   hollowBoard: boolean // the stored board has no agents list: the token report cannot be made from it (0.12.0)
   corruptBoard: boolean // reads of `board` answer a board with no units or rejects lists
   reads: string[] // the keys read, in order
@@ -150,6 +150,9 @@ function engine(on: any, w: World) {
     // a live value stored by the earlier shape (live-1), which had a cost text
     if (w.oldLive && e.key === 'live') {
       return { value: { value: { shape: 'live-1', value: { now: 5, cost: '$2.50', paneOpen: true } }, version: 1 } }
+    }
+    if (w.uiOld && e.key === 'ui') {
+      return { value: { value: { shape: 'ui-2', value: { selected: null } }, version: 1 } }
     }
     return next(e)
   })
@@ -234,7 +237,7 @@ function engine(on: any, w: World) {
 function world(over: Partial<World> = {}): World {
   return {
     panes: [], placeOnOpen: true, opens: 0, list: [], listCalls: 0, board: null, live: null, detail: null, ui: null, log: null,
-    liveWrites: 0, animWrites: 0, failWrites: false, failLogWrites: false, spawnCalls: 0, spawnModel: null, corruptBoard: false, hollowBoard: false, oldLive: false, reads: [],
+    liveWrites: 0, animWrites: 0, failWrites: false, failLogWrites: false, spawnCalls: 0, spawnModel: null, corruptBoard: false, hollowBoard: false, oldLive: false, uiOld: false, reads: [],
     boardGate: null, units: [], registered: [], files: {}, fsWrites: [], failFsWrite: false, failExists: false, env: { HOME },
     mtimes: {}, root: '/work/main', repo: null, failJournal: false, spawned: [], ghosts: [], gate: null, uiLogs: [], commands: [],
     ...over,
@@ -899,19 +902,19 @@ test('the pane height: the plan box and the session log by exact row accounting'
   await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, phase: 'design' } as any)
   const mount = (rows: number) =>
     $.ui.mount({ plugin: 'flowestra', component: 'Pane', requestId: 'flowestra', surface: 'terminal', props: { ...PANE_PROPS(96), scroll: { offset: 0, bodyRows: rows } } })
-  // no card: 13 fixed rows (header, legend, lead box, stem, return box, status line); the plan box 6;
+  // no card: 14 fixed rows (nav, header, legend, lead box, stem, return box, status line); the plan box 6;
   // the log holds the one phase entry: the full log needs 4 rows, the compact one 1.
-  // Under 19 the plan box is left out and its rows go to the log.
+  // Under 20 the plan box is left out and its rows go to the log.
   for (const [rows, plan, log] of [
-    [13, false, 'none'],
-    [14, false, 'compact'],
-    [16, false, 'compact'],
-    [17, false, 'full'],
+    [14, false, 'none'],
+    [15, false, 'compact'],
+    [17, false, 'compact'],
     [18, false, 'full'],
-    [19, true, 'none'],
-    [20, true, 'compact'],
-    [22, true, 'compact'],
-    [23, true, 'full'],
+    [19, false, 'full'],
+    [20, true, 'none'],
+    [21, true, 'compact'],
+    [23, true, 'compact'],
+    [24, true, 'full'],
   ] as const) {
     const ui: any = await mount(rows)
     expect((await flowOf(ui)).plan !== null).toBe(plan)
@@ -1012,7 +1015,7 @@ test('a post of { select } from the flow selects that card and a second clears i
   expect(await ui.find({ key: 'detail' })).toBeUndefined()
 
   await ui.post({ select: 'agent-pick' }, { in: 'agent-flow' })
-  expect(w.ui).toEqual({ selected: 'agent-pick' })
+  expect(w.ui).toEqual({ selected: 'agent-pick', tab: 'board', scope: 'task' })
   const cards = await workerCards(ui)
   expect(cards.find(c => c.id === 'agent-pick')?.selected).toBe(true)
   expect(cards.find(c => c.id === 'agent-other')?.selected).toBe(false)
@@ -1021,15 +1024,15 @@ test('a post of { select } from the flow selects that card and a second clears i
   expect(strip?.text).toMatch(/Read the files and report back\./)
 
   await ui.post({ select: 'agent-pick' }, { in: 'agent-flow' })
-  expect(w.ui).toEqual({ selected: null })
+  expect(w.ui).toEqual({ selected: null, tab: 'board', scope: 'task' })
   expect(await ui.find({ key: 'detail' })).toBeUndefined()
 
   // another card selected; then posts that name no worker, or carry other data, leave it be
   await ui.post({ select: 'agent-other' }, { in: 'agent-flow' })
-  expect(w.ui).toEqual({ selected: 'agent-other' })
+  expect(w.ui).toEqual({ selected: 'agent-other', tab: 'board', scope: 'task' })
   for (const data of [{ select: 'agent-nobody' }, { select: 'main' }, { select: '' }, { select: 3 }, { pick: 'agent-pick' }, 'agent-pick', ['agent-pick'], null]) {
     await ui.post(data as any, { in: 'agent-flow' })
-    expect(w.ui).toEqual({ selected: 'agent-other' })
+    expect(w.ui).toEqual({ selected: 'agent-other', tab: 'board', scope: 'task' })
   }
   expect(w.animWrites).toBe(0)
   await ui.unmount()
@@ -1270,10 +1273,10 @@ test('/clear empties detail and ui and stops the clock; nothing is ever written 
   await ui.unmount()
   await clock.advance(1000)
   expect(Object.keys(detailOf(w).agents)).toEqual(['agent-clear'])
-  expect(w.ui).toEqual({ selected: 'agent-clear' })
+  expect(w.ui).toEqual({ selected: 'agent-clear', tab: 'board', scope: 'task' })
   await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as any)
   expect(w.detail).toEqual({ agents: {} })
-  expect(w.ui).toEqual({ selected: null })
+  expect(w.ui).toEqual({ selected: null, tab: 'board', scope: 'task' })
   const writes = w.liveWrites
   await clock.advance(3000)
   expect(w.liveWrites).toBe(writes) // the clock stopped with it
@@ -2533,21 +2536,34 @@ async function runBoard($: any, args: string) {
   return $.command.run({ command: 'board', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
 }
 
-test('/board tokens writes the report one ui.log per line, answers REPORT_DONE_TEXT and does not toggle', async ($, on) => {
+test('/board tokens with the pane closed opens it on Tokens, answers TOKENS_SHOWN_TEXT and writes no ui.log', async ($, on) => {
   const w = world()
   engine(on, w)
   await start($)
   await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, task: 'Count it', phase: 'executing' } as any)
-  const opens = w.opens
   w.uiLogs.length = 0
   const r: any = await runBoard($, '  Tokens ')
-  expect(r.text).toBe(REPORT_DONE_TEXT)
-  const expected = usageReport(boardOf(w), injectedParts('full', modelsNote(modelsFromOptions({}))))
-  expect(expected.length).toBeGreaterThan(0)
-  expect(w.uiLogs).toEqual(expected)
-  expect(w.opens).toBe(opens)
-  expect(w.panes).toHaveLength(0)
-  expect((await runBoard($, 'tokens')).text).toBe(REPORT_DONE_TEXT)
+  expect(r.text).toBe(TOKENS_SHOWN_TEXT)
+  expect(r.text).toBe('Agent Board: Tokens tab shown.')
+  expect(w.opens).toBe(1)
+  expect(w.panes).toHaveLength(1)
+  expect(w.ui?.tab).toBe('tokens')
+  expect(w.uiLogs).toEqual([])
+  // already open on Tokens: it stays open
+  expect((await runBoard($, 'tokens')).text).toBe(TOKENS_SHOWN_TEXT)
+  expect(w.panes).toHaveLength(1)
+  expect(w.opens).toBe(1)
+  expect(w.uiLogs).toEqual([])
+})
+
+test('/board tokens when the pane cannot be placed answers TOKENS_WAITING_TEXT', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  w.placeOnOpen = false
+  await start($)
+  const r: any = await runBoard($, 'tokens')
+  expect(r.text).toBe(TOKENS_WAITING_TEXT)
+  expect(w.ui?.tab).toBe('tokens')
 })
 
 test('/board toggles as before and /board foo answers BOARD_USAGE_TEXT without toggling', async ($, on) => {
@@ -2564,29 +2580,65 @@ test('/board toggles as before and /board foo answers BOARD_USAGE_TEXT without t
   expect(w.panes).toHaveLength(1)
 })
 
-// A hook of the test world that throws is skipped by the kit (see corruptBoard), so a failing $.ui.log cannot be
-// staged; a stored board the report cannot be made from fails the same try, the one around the whole report path.
-test('/board tokens with the report failing answers the failure text and the session goes on', async ($, on) => {
-  const w = world()
-  engine(on, w)
-  await start($)
-  await $.tool.call({ tool: BOARD_TOOL_FULL_NAME, task: 'Count it', phase: 'executing' } as any)
-  w.hollowBoard = true
-  w.uiLogs.length = 0
-  const r: any = await runBoard($, 'tokens')
-  expect(r.text).toBe('Agent Board: the token report could not be made.')
-  expect(r.text).toBe(REPORT_FAILED_TEXT)
-  expect(w.uiLogs).toEqual([])
-  w.hollowBoard = false
-  expect((await runBoard($, '')).text).toBe('Agent Board opened.')
-})
-
 test('/board is registered with argumentHint [tokens] and the new description', async ($, on) => {
   const w = world()
   engine(on, w)
   await start($)
   const c = w.commands.find(x => x.name === 'board')
-  expect(c).toMatchObject({ description: 'Open or close the Agent Board; /board tokens for the token report', argumentHint: '[tokens]' })
+  expect(c).toMatchObject({ description: 'Open or close the Agent Board; /board tokens opens it on the Tokens tab', argumentHint: '[tokens]' })
   expect(BOARD_COMMAND_DESCRIPTION).toBe(c.description)
   expect(BOARD_COMMAND_HINT).toBe('[tokens]')
+})
+
+const mountPane = ($: any, surface: string, placement: 'dock' | 'inline' | 'widget' = 'dock') =>
+  $.ui.mount({ plugin: 'flowestra', component: 'Pane', requestId: 'flowestra', surface, props: { ...PANE_PROPS(96), placement } })
+
+test('pressing tab-tokens in the mounted pane draws the tokens tree and no agent-flow Client; tab-board brings the flow back', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await work($, w, 'Tab worker')
+  const ui: any = await mountPane($, 'terminal')
+  expect(await ui.find({ key: 'tokens' })).toBeUndefined()
+  expect(await ui.find({ key: 'agent-flow' })).toBeDefined()
+  await ui.press({ key: 'tab-tokens' })
+  expect(w.ui?.tab).toBe('tokens')
+  expect(await ui.find({ key: 'tokens' })).toBeDefined()
+  expect(await ui.find({ key: 'agent-flow' })).toBeUndefined()
+  expect(await ui.find({ type: 'Client' })).toBeUndefined()
+  await ui.press({ key: 'tab-board' })
+  expect(w.ui?.tab).toBe('board')
+  expect(await ui.find({ key: 'tokens' })).toBeUndefined()
+  expect(await ui.find({ key: 'agent-flow' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('on the desktop surface the tab switch draws tokens too; the widget seat draws no nav and always the Board tab', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await work($, w, 'Tab worker')
+  const ui: any = await mountPane($, 'desktop')
+  await ui.press({ key: 'tab-tokens' })
+  expect(await ui.find({ key: 'tokens' })).toBeDefined()
+  expect(await ui.find({ key: 'still-flow' })).toBeUndefined()
+  await ui.unmount()
+  // the stored tab is now tokens; the widget still draws the Board
+  const widget: any = await mountPane($, 'desktop', 'widget')
+  expect(await widget.find({ key: 'nav' })).toBeUndefined()
+  expect(await widget.find({ key: 'tokens' })).toBeUndefined()
+  expect(await widget.find({ key: 'still-flow' })).toBeDefined()
+  await widget.unmount()
+})
+
+test('a ui value stored under ui-2 reads as Board', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  w.uiOld = true
+  await start($)
+  const ui: any = await mountPane($, 'desktop')
+  expect(await ui.find({ key: 'nav' })).toBeDefined()
+  expect(await ui.find({ key: 'tokens' })).toBeUndefined()
+  expect(await ui.find({ key: 'still-flow' })).toBeDefined()
+  await ui.unmount()
 })

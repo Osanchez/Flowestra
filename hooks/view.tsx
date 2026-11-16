@@ -16,7 +16,9 @@ import type { BoxProps, ButtonProps, ElementConstructor, RenderElement, TextProp
 
 import type { AgentBox, Board, GateHealth, BoxStatus, Detail, FlowProps, Log, LogKind, Row, RowCard, RowCardStatus, Tier, Tokens, Ui, Unit } from '../types'
 import { gateBandPart, gateStatusValue, isDegraded, UNGATED_SHORT } from './gate'
+import { drawNav } from './nav'
 import { auditParts } from './policy'
+import type { Injected } from './report'
 import { hasUsage, usageScope } from './usage'
 import {
   auditIssue,
@@ -47,7 +49,7 @@ export { formatDuration, shortModel }
 export const TIER_COLOR: Record<Tier, ThemeKey> = { haiku: 'bashBorder', sonnet: 'ide', opus: 'suggestion' }
 
 /** A tier's colour; a null (or unknown) tier draws as `'suggestion'`. */
-function tierColor(tier: Tier | null | undefined): ThemeKey {
+export function tierColor(tier: Tier | null | undefined): ThemeKey {
   return tier === 'haiku' || tier === 'sonnet' || tier === 'opus' ? TIER_COLOR[tier] : 'suggestion'
 }
 
@@ -65,6 +67,10 @@ export type ViewModel = {
   log: Log // the session log, oldest first
   onSelect: (id: string) => void // a press on a card (still fallback row only)
   gate?: GateHealth // the spawn gate's health (0.11.0); absent or healthy draws as before
+  onTab?: (tab: 'board' | 'tokens') => void // a press on a navbar Button (0.13.0)
+  onScope?: (scope: 'task' | 'all') => void // a press on a scope Button of the Tokens tab
+  placement?: 'dock' | 'inline' | 'widget' // the widget seat draws no navbar
+  injected?: readonly Injected[] // the text the mod puts in the lead's prompt (the tokens tab's overhead)
 }
 
 /** The part of a surface's element table the view uses: present on every surface. */
@@ -88,6 +94,7 @@ const MAX_CARD = 28
  * optional tokens line below it.
  */
 export const ROWS = {
+  nav: 1,
   header: 1,
   legend: 1,
   lead: 5,
@@ -981,7 +988,7 @@ export function paneFit(vm: ViewModel): PaneFit {
   }
   const leadsShown = rowLeads(vm.board, vm.now).length > 0
   const workersShown = rowWorkers(vm.board, vm.now).length > 0
-  let fixed = ROWS.header + ROWS.legend + ROWS.lead
+  let fixed = (vm.placement === 'widget' ? 0 : ROWS.nav) + ROWS.header + ROWS.legend + ROWS.lead
   if (leadsShown) fixed += ROWS.leads
   if (leadsShown && workersShown) fixed += ROWS.between
   fixed += workersShown ? ROWS.workers : ROWS.noWorkers
@@ -1021,6 +1028,7 @@ export function drawPane(el: El, vm: ViewModel, flow: RenderElement | null): Ren
 
   return (
     <Box key="pane" flexDirection="column" width={vm.width}>
+      {vm.placement !== 'widget' && drawNav(el, vm)}
       {drawHeader(el, vm)}
       {drawLegend(el, vm)}
       <Box key="flow" flexDirection="column" width={vm.width}>

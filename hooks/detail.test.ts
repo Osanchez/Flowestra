@@ -15,6 +15,8 @@ import {
   emptyDetail,
   emptyUi,
   selectCard,
+  selectScope,
+  selectTab,
 } from './detail'
 import { MAIN_ID } from './state'
 
@@ -29,13 +31,13 @@ const entry = (d: Detail, id: string): AgentDetail => {
 describe('constants and empties', () => {
   test('shape tags and limits', () => {
     expect(DETAIL_SHAPE).toBe('detail-2')
-    expect(UI_SHAPE).toBe('ui-2')
+    expect(UI_SHAPE).toBe('ui-3')
     expect(BRIEF_MAX).toBe(600)
     expect(TOOLS_MAX).toBe(8)
   })
   test('empty values', () => {
     expect(emptyDetail()).toEqual({ agents: {} })
-    expect(emptyUi()).toEqual({ selected: null })
+    expect(emptyUi()).toEqual({ selected: null, tab: 'board', scope: 'task' })
     expect(emptyAgentDetail()).toEqual({ brief: null, briefCut: false, tools: [] })
   })
 })
@@ -149,32 +151,79 @@ describe('detailComplete', () => {
 describe('selectCard', () => {
   test('selects a card, then closes it on a second press', () => {
     const on = selectCard(emptyUi(), 'a1')
-    expect(on).toEqual({ selected: 'a1' })
-    expect(selectCard(on, 'a1')).toEqual({ selected: null })
+    expect(on).toEqual({ selected: 'a1', tab: 'board', scope: 'task' })
+    expect(selectCard(on, 'a1')).toEqual({ selected: null, tab: 'board', scope: 'task' })
   })
   test('another card moves the selection', () => {
-    expect(selectCard({ selected: 'a1' }, 'a2')).toEqual({ selected: 'a2' })
+    expect(selectCard({ ...emptyUi(), selected: 'a1' }, 'a2').selected).toBe('a2')
   })
   test('does not mutate the input', () => {
-    const ui: Ui = { selected: 'a1' }
+    const ui: Ui = { ...emptyUi(), selected: 'a1' }
     selectCard(ui, 'a1')
     selectCard(ui, 'a2')
-    expect(ui).toEqual({ selected: 'a1' })
+    expect(ui).toEqual({ selected: 'a1', tab: 'board', scope: 'task' })
   })
 })
 
 describe('dropSelection', () => {
   test('clears a selection whose card has gone', () => {
-    expect(dropSelection({ selected: 'a1' }, ['a2', 'a3'])).toEqual({ selected: null })
-    expect(dropSelection({ selected: 'a1' }, [])).toEqual({ selected: null })
+    expect(dropSelection({ ...emptyUi(), selected: 'a1' }, ['a2', 'a3']).selected).toBeNull()
+    expect(dropSelection({ ...emptyUi(), selected: 'a1' }, []).selected).toBeNull()
   })
   test('keeps the same object when the card is present', () => {
-    const ui: Ui = { selected: 'a2' }
+    const ui: Ui = { ...emptyUi(), selected: 'a2' }
     expect(dropSelection(ui, ['a1', 'a2'])).toBe(ui)
   })
   test('keeps the same object when nothing is selected', () => {
     const ui = emptyUi()
     expect(dropSelection(ui, [])).toBe(ui)
     expect(dropSelection(ui, ['a1'])).toBe(ui)
+  })
+})
+
+describe('tab and scope keep through card changes', () => {
+  const tokens: Ui = { selected: null, tab: 'tokens', scope: 'all' }
+  test('selectCard toggles selected and keeps tab and scope', () => {
+    const on = selectCard(tokens, 'a1')
+    expect(on).toEqual({ selected: 'a1', tab: 'tokens', scope: 'all' })
+    expect(selectCard(on, 'a1')).toEqual(tokens)
+  })
+  test('dropSelection keeps tab and scope when it drops', () => {
+    const ui: Ui = { ...tokens, selected: 'a1' }
+    expect(dropSelection(ui, [])).toEqual({ selected: null, tab: 'tokens', scope: 'all' })
+  })
+  test('dropSelection returns the same object when nothing drops', () => {
+    expect(dropSelection(tokens, [])).toBe(tokens)
+    const ui: Ui = { ...tokens, selected: 'a1' }
+    expect(dropSelection(ui, ['a1'])).toBe(ui)
+  })
+})
+
+describe('selectTab and selectScope', () => {
+  test('selectTab sets the tab, keeps the rest', () => {
+    const ui = emptyUi()
+    expect(selectTab(ui, 'tokens')).toEqual({ selected: null, tab: 'tokens', scope: 'task' })
+    expect(ui.tab).toBe('board')
+  })
+  test('selectTab returns the same object when unchanged', () => {
+    const ui = emptyUi()
+    expect(selectTab(ui, 'board')).toBe(ui)
+  })
+  test('selectTab ignores an unknown value', () => {
+    const ui = emptyUi()
+    expect(selectTab(ui, 'nope' as never)).toBe(ui)
+  })
+  test('selectScope sets the scope, keeps the rest', () => {
+    const ui = emptyUi()
+    expect(selectScope(ui, 'all')).toEqual({ selected: null, tab: 'board', scope: 'all' })
+    expect(ui.scope).toBe('task')
+  })
+  test('selectScope returns the same object when unchanged', () => {
+    const ui = emptyUi()
+    expect(selectScope(ui, 'task')).toBe(ui)
+  })
+  test('selectScope ignores an unknown value', () => {
+    const ui = emptyUi()
+    expect(selectScope(ui, 'nope' as never)).toBe(ui)
   })
 })

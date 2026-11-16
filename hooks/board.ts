@@ -677,16 +677,17 @@ export const BOARD_COMMAND_TEXT: Record<BoardToggleResult, string> = {
 }
 
 /** `/board`'s registered description and argument hint. */
-export const BOARD_COMMAND_DESCRIPTION = 'Open or close the Agent Board; /board tokens for the token report'
+export const BOARD_COMMAND_DESCRIPTION = 'Open or close the Agent Board; /board tokens opens it on the Tokens tab'
 export const BOARD_COMMAND_HINT = '[tokens]'
 
-/** What `/board tokens` answers once its lines are written (the lines themselves are not sent to the model). */
-export const REPORT_DONE_TEXT =
-  'Agent Board: token report written as dim lines in the transcript; they are not sent to the model.'
+/** What `/board tokens` answers once the pane is open on the Tokens tab. */
+export const TOKENS_SHOWN_TEXT = 'Agent Board: Tokens tab shown.'
+/** What `/board tokens` answers when the pane cannot be placed yet. */
+export const TOKENS_WAITING_TEXT = 'Agent Board: the Tokens tab will show once the terminal is wide enough.'
+/** What `/board tokens` answers when the tab could not be shown. */
+export const TOKENS_FAILED_TEXT = 'Agent Board: the Tokens tab could not be shown.'
 /** What `/board` answers to an argument it does not know; the pane is not toggled. */
-export const BOARD_USAGE_TEXT = '/board opens or closes the pane; /board tokens writes the token report.'
-/** What `/board tokens` answers when the report could not be made. */
-export const REPORT_FAILED_TEXT = 'Agent Board: the token report could not be made.'
+export const BOARD_USAGE_TEXT = '/board opens or closes the pane; /board tokens opens it on the Tokens tab.'
 
 /**
  * Registers `/board`. Call it from the mod's one `session.start` hook, as

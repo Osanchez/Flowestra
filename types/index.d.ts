@@ -121,7 +121,9 @@ export type Live = { now: number; paneOpen: boolean }
 export type ToolRun = { id: string; tool: string; startedAt: number }   // a tool call in flight
 export type AgentDetail = { brief: string | null; briefCut: boolean; tools: ToolRun[] }
 export type Detail = { agents: Record<string, AgentDetail> }            // keyed by box id ('main' included)
-export type Ui = { selected: string | null }                            // the worker card whose detail strip is open
+export type BoardTab = 'board' | 'tokens'
+export type TokenScope = 'task' | 'all'
+export type Ui = { selected: string | null; tab: BoardTab; scope: TokenScope }  // the open card; the pane's tab; the Tokens tab's scope
 
 // The session log: what happened, oldest first, at most 50 entries.
 export type LogKind = 'spawned' | 'done' | 'failed' | 'stopped' | 'phase' | 'audit' | 'verdict'

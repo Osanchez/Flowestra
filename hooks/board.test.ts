@@ -1,12 +1,18 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
+  BOARD_COMMAND_DESCRIPTION,
+  BOARD_COMMAND_HINT,
   BOARD_PROMPT_SECTION,
   BOARD_PROMPT_SECTION_TEXT,
   BOARD_TOOL,
   BOARD_TOOL_DESCRIPTION,
   BOARD_TOOL_FULL_NAME,
   BOARD_TOOL_SCHEMA,
+  BOARD_USAGE_TEXT,
+  TOKENS_FAILED_TEXT,
+  TOKENS_SHOWN_TEXT,
+  TOKENS_WAITING_TEXT,
   PHASES,
   POLICY_SECTION_ID,
   ROUTING_POLICY_SECTION,
@@ -730,5 +736,16 @@ describe('withFlowestraSections with a models note', () => {
   })
   test('an empty note gives the same sections as no argument', () => {
     expect(withFlowestraSections([], 'light', '')).toEqual(withFlowestraSections([], 'light'))
+  })
+})
+
+describe('the /board command texts (0.13.0)', () => {
+  test('the description and the three Tokens answers', () => {
+    expect(BOARD_COMMAND_DESCRIPTION).toBe('Open or close the Agent Board; /board tokens opens it on the Tokens tab')
+    expect(BOARD_COMMAND_HINT).toBe('[tokens]')
+    expect(TOKENS_SHOWN_TEXT).toBe('Agent Board: Tokens tab shown.')
+    expect(TOKENS_WAITING_TEXT).toBe('Agent Board: the Tokens tab will show once the terminal is wide enough.')
+    expect(TOKENS_FAILED_TEXT).toBe('Agent Board: the Tokens tab could not be shown.')
+    expect(BOARD_USAGE_TEXT).toBe('/board opens or closes the pane; /board tokens opens it on the Tokens tab.')
   })
 })

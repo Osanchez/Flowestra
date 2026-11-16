@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { AgentBox, Board, Tier, Tokens, Unit } from '../types'
 import { emptyBoard } from './state'
-import { hasUsage, usageScope } from './usage'
+import { hasUsage, usageScope, workerUsage } from './usage'
 
 const LOADED = new Date(2026, 10, 15, 14, 2, 11).getTime()
 
@@ -336,5 +336,68 @@ describe('tiers', () => {
   test('tier names used above are the three of the board', () => {
     const tiers: Tier[] = ['haiku', 'sonnet', 'opus']
     expect(tiers.length).toBe(3)
+  })
+})
+
+describe('workerUsage', () => {
+  test('orders by all tokens descending, no-count boxes last, ties by start; the lead never appears', () => {
+    const b = withBoxes('t', [
+      box('main', { type: 'orchestrator', unitId: null, name: null, taskId: null, tokens: tk(9, 9, 9, 9, 9) }),
+      box('n', { taskId: 't', tokens: null }),
+      box('small', { taskId: 't', tokens: tk(1, 0, 0, 1, 1) }),
+      box('t2', { taskId: 't', startedAt: 20, tokens: tk(5, 0, 0, 5, 1) }),
+      box('t1', { taskId: 't', startedAt: 10, tokens: tk(5, 0, 0, 5, 1) }),
+      box('big', { taskId: 't', tokens: tk(50, 0, 0, 50, 1) }),
+    ])
+    expect(workerUsage(b, 'task').map(w => w.id)).toEqual(['big', 't1', 't2', 'small', 'n'])
+    expect(workerUsage(b, 'task')[4]?.tokens).toBeNull()
+  })
+
+  test('run is 1, 2, 3 for three runs of one unit, by start; 1 without a unit key', () => {
+    const b = withBoxes('t', [
+      box('c', { taskId: 't', unitId: 'u1', name: 'u1', startedAt: 30 }),
+      box('a', { taskId: 't', unitId: 'u1', name: 'u1', startedAt: 10 }),
+      box('b', { taskId: 't', unitId: 'u1', name: 'u1', startedAt: 20 }),
+      box('d', { taskId: 't', unitId: null, name: null, startedAt: 40 }),
+    ])
+    const run = (id: string) => workerUsage(b, 'task').find(w => w.id === id)?.run
+    expect([run('a'), run('b'), run('c'), run('d')]).toEqual([1, 2, 3, 1])
+  })
+
+  test('rejected by board.rejects and by a unit verdict', () => {
+    const b = withBoxes('t', [
+      box('a', { taskId: 't', unitId: 'u1', name: 'u1' }),
+      box('b', { taskId: 't', unitId: 'u2', name: 'u2' }),
+      box('c', { taskId: 't', unitId: 'u3', name: 'u3' }),
+    ])
+    b.rejects = [{ unitId: 'u1', tier: 'sonnet', kind: 'implement', taskId: 't' }]
+    b.units = [unit('u2', 'rejected'), unit('u3', 'accepted')]
+    const rej = workerUsage(b, 'task').map(w => [w.id, w.rejected])
+    expect(rej).toEqual([['a', true], ['b', true], ['c', false]])
+  })
+
+  test('label carries the unit id; substitutedFrom when runTier differs from the model tier', () => {
+    const b = withBoxes('t', [
+      box('a', {
+        taskId: 't',
+        unitId: 'u1',
+        name: 'u1',
+        label: 'Design',
+        model: 'claude-opus-5-5',
+        routed: { tier: 'sonnet', kind: 'implement', audit: 'a | sonnet | b | c', ranOn: 'opus' } as AgentBox['routed'],
+      }),
+      box('b', { taskId: 't', unitId: null, name: null, label: 'Plain' }),
+    ])
+    const [a, p] = workerUsage(b, 'task')
+    expect(a?.label).toBe('u1 Design')
+    expect(a?.substitutedFrom).toBe('sonnet')
+    expect(p?.label).toBe('Plain')
+    expect(p?.substitutedFrom).toBeNull()
+  })
+
+  test('otherTask only in scope all; scope task leaves other tasks out', () => {
+    const b = withBoxes('t', [box('a', { taskId: 't' }), box('x', { taskId: 'other' })])
+    expect(workerUsage(b, 'task').map(w => [w.id, w.otherTask])).toEqual([['a', false]])
+    expect(workerUsage(b, 'all').map(w => [w.id, w.otherTask])).toEqual([['a', false], ['x', true]])
   })
 })

@@ -1,13 +1,14 @@
 // Agent Board: the visual layer's state. Pure reducers and selectors: no `$`,
 // no clock (every time comes in as an argument), no drawing.
 
-import type { AgentDetail, Detail, ToolRun, Ui } from '../types'
+import type { AgentDetail, BoardTab, Detail, TokenScope, ToolRun, Ui } from '../types'
 import { MAIN_ID } from './state'
 
 // Change a tag when its value's fields change (see BOARD_SHAPE in state.ts).
 // detail-2: AgentDetail lost `pulse`. ui-2: Ui is `{ selected }`.
+// ui-3: Ui gained tab and scope.
 export const DETAIL_SHAPE = 'detail-2'
-export const UI_SHAPE = 'ui-2'
+export const UI_SHAPE = 'ui-3'
 
 export const BRIEF_MAX = 600 // characters of the Agent prompt kept for the detail strip
 export const TOOLS_MAX = 8 // tool calls in flight kept per agent; the oldest go first
@@ -17,7 +18,7 @@ export function emptyDetail(): Detail {
 }
 
 export function emptyUi(): Ui {
-  return { selected: null }
+  return { selected: null, tab: 'board', scope: 'task' }
 }
 
 export function emptyAgentDetail(): AgentDetail {
@@ -84,11 +85,26 @@ export function detailComplete(detail: Detail, agentId: string | undefined, _now
 
 /** Open a card's detail strip, or close it when it is the one already open. */
 export function selectCard(ui: Ui, id: string): Ui {
-  return ui.selected === id ? { selected: null } : { selected: id }
+  return { ...ui, selected: ui.selected === id ? null : id }
 }
 
 /** Close the detail strip when its card is no longer among `present`; otherwise the same object. */
 export function dropSelection(ui: Ui, present: readonly string[]): Ui {
-  if (ui.selected !== null && !present.includes(ui.selected)) return { selected: null }
+  if (ui.selected !== null && !present.includes(ui.selected)) return { ...ui, selected: null }
   return ui
+}
+
+const TABS: readonly BoardTab[] = ['board', 'tokens']
+const SCOPES: readonly TokenScope[] = ['task', 'all']
+
+/** Switch the pane's tab; the same object when unchanged or when `tab` is unknown. */
+export function selectTab(ui: Ui, tab: BoardTab): Ui {
+  if (!TABS.includes(tab) || ui.tab === tab) return ui
+  return { ...ui, tab }
+}
+
+/** Switch the Tokens tab's scope; the same object when unchanged or when `scope` is unknown. */
+export function selectScope(ui: Ui, scope: TokenScope): Ui {
+  if (!SCOPES.includes(scope) || ui.scope === scope) return ui
+  return { ...ui, scope }
 }
