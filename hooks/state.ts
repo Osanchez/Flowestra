@@ -1,7 +1,9 @@
 import { atom } from 'claude-code'
 import type { ModelUsage } from 'claude-code'
 
-import type { AgentBox, Board, BoxStatus, Live, Phase, Routed, Row, TaskKind, TaskSlot, Tier, Tokens, Unit } from '../types'
+import type { AgentBox, Board, BoxStatus, Live, Phase, Routed, Row, TaskKind, TaskSlot, Tier, Tokens, Unit, WorkerModels } from '../types'
+import { ALL_ON, offList, tierTitle } from './models'
+import { KINDS_BY_TIER } from './policy'
 
 // A running worker with no event at all for this long gets the quiet mark (owner's decision 2).
 export const QUIET_SECONDS = 120
@@ -18,9 +20,10 @@ const DEFAULT_TYPE = 'general-purpose'
 // board-4: three tiers (opus, sonnet, haiku); Unit gained spec; a reject records its tier.
 // board-5: workstreams. Board gained taskId, repo, parked, closed, activeAt;
 // AgentBox gained taskId and routed; a reject records its taskId; Unit gained context.
+// board-6: Routed gained ranOn.
 // register.tsx declares its own atoms over the same refs with these tags
 // (`claude plugin validate` reads only an atom made in the file that uses it).
-export const BOARD_SHAPE = 'board-5'
+export const BOARD_SHAPE = 'board-6'
 export const LIVE_SHAPE = 'live-2'
 
 export const boardAtom = atom({ plugin: 'flowestra', key: 'board' } as const, emptyBoard(0), {
@@ -338,10 +341,10 @@ export function otherTaskOf(board: Board, box: AgentBox): string | null {
 }
 
 /** The routing a unit gives a box at spawn: its tier, kind and audit line when it has all three; else null. */
-function routedOf(unit: Unit | null | undefined): Routed | null {
+function routedOf(unit: Unit | null | undefined, models: WorkerModels = ALL_ON): Routed | null {
   const tier = unitTier(unit)
   if (!unit || tier === null || unit.kind === null || unit.kind === undefined || !given(unit.audit)) return null
-  return { tier, kind: unit.kind, audit: unit.audit }
+  return { tier, kind: unit.kind, audit: unit.audit, ranOn: models[tier] ?? tier }
 }
 
 export type SpawnInfo = {
@@ -353,6 +356,7 @@ export type SpawnInfo = {
   parentAgentId?: string | null
   promptChars?: number | null
   resumed?: boolean // true when the spawn resumes an existing agent
+  models?: WorkerModels // the worker models the settings give at spawn; absent = all on
 }
 
 /**
@@ -385,7 +389,7 @@ export function applySpawn(board: Board, info: SpawnInfo, now: number): Board {
   const unitId = linked ?? prev?.unitId ?? null
   const routed = kept
     ? (kept.routed ?? null)
-    : routedOf(unitId !== null ? board.units.find(u => u.id === unitId) : null)
+    : routedOf(unitId !== null ? board.units.find(u => u.id === unitId) : null, info.models)
   const fields: Partial<AgentBox> = {
     label: cutLabel(info.description, type),
     type,
@@ -930,9 +934,20 @@ export function tierOf(board: Board, box: AgentBox): Tier | null {
   return box.routed?.tier ?? unitTier(unitOf(board, box))
 }
 
+/**
+ * The tier of the work a box carries out. A run substituted as the settings said
+ * (`routed.ranOn` differs from the unit's tier and the model measured is `ranOn`)
+ * counts as the unit's tier; otherwise the tier measured by `tierOf`.
+ */
+export function runTier(board: Board, box: AgentBox): Tier | null {
+  const r = box.routed
+  if (r && r.ranOn !== undefined && r.ranOn !== r.tier && modelTier(box.model) === r.ranOn) return r.tier
+  return tierOf(board, box)
+}
+
 /** The row a box is drawn in: Haiku workers lead, everyone else works. */
 export function rowOf(board: Board, box: AgentBox): Row {
-  return tierOf(board, box) === 'haiku' ? 'leads' : 'workers'
+  return runTier(board, box) === 'haiku' ? 'leads' : 'workers'
 }
 
 export type AuditIssue = 'none' | 'no-audit' | 'tier-mismatch'
@@ -953,6 +968,7 @@ export function auditIssue(board: Board, box: AgentBox): AuditIssue {
   if (routed !== null) {
     tier = unitTier(routed)
     if (tier === null || !given(routed.audit)) return 'no-audit'
+    tier = routed.ranOn ?? tier
   } else {
     const u = unitOf(board, box)
     tier = unitTier(u)
@@ -1057,6 +1073,7 @@ export type SpawnRequest = {
   description?: string | null
   fork?: boolean; workflow?: boolean; resume?: boolean
   nested?: boolean // spawned from a subagent's loop, not the main loop
+  models?: WorkerModels // the worker models the settings give; absent = all on
   specMissing?: boolean // the covering unit names a spec file that does not exist
   contextMissing?: string | null // the first of the covering unit's context items that did not resolve
 }
@@ -1125,13 +1142,24 @@ export function denyWrongWorker(id: string, unitTier: Tier, workerTier: Tier): s
 }
 
 /** A tier worker given a model of another tier (policy §1). */
-export function denyModelOverride(workerTier: Tier, model: string): string {
-  return `Spawn refused (policy §1): the ${workerTier} worker runs on ${workerTier}; do not pass model "${model}".`
+export function denyModelOverride(workerTier: Tier, runsOn: Tier, model: string): string {
+  const suffix = runsOn === workerTier ? '' : ` (${tierTitle(workerTier)} is switched off in the Flowestra settings)`
+  return `Spawn refused (policy §1): the ${workerTier} worker runs on ${runsOn}${suffix}; do not pass model "${model}".`
 }
 
 /** Another agent type that does not name the unit's tier as its model (policy §1). */
-export function denyNoModel(id: string, tier: Tier): string {
-  return `Spawn refused (policy §1): unit "${id}" is routed to ${tier}; an agent type other than the tier workers must name model "${tier}" in the call.`
+export function denyNoModel(id: string, tier: Tier, runsOn: Tier): string {
+  return `Spawn refused (policy §1): unit "${id}" is routed to ${tier}; an agent type other than the tier workers must name model "${runsOn}" in the call.`
+}
+
+/** A tier no worker model is on for (the settings switch off every model its cascade names). */
+export function denyUnavailable(id: string, tier: Tier, models: WorkerModels): string {
+  return `Spawn refused: unit "${id}" is routed to ${tier}, and no worker model is on for ${tier}-tier work (the Flowestra settings switch off ${offList(models)}). Do that work yourself, or ask the user to turn a worker model back on in /config.`
+}
+
+/** A unit of a kind its tier no longer takes (policy §3). */
+export function denyKind(id: string, tier: Tier, kind: TaskKind): string {
+  return `Spawn refused (policy §3): unit "${id}" is a ${tier} unit of kind ${kind}, which ${tier} no longer takes (${tier} takes ${KINDS_BY_TIER[tier].join(', ')}). Re-route it to a higher tier under a new unit.`
 }
 
 /** A unit the orchestrator rejected (policy §8). */
@@ -1170,10 +1198,13 @@ export function denyFork(): string {
  * main loop is refused; forks, workflows, resumes and nested spawns pass;
  * exempt types pass; refused built-ins; no covering unit (in the active task)
  * with a tier, a kind and an audit line (with no name, the refusal names a
- * unit of a parked task the description matches); the call's tier (worker
- * type or model) against the unit's; a rejected unit; a barred (tier, kind); a
- * third run at one tier (runs of the same unit id in the active task only); a
- * missing spec file; a context item that did not resolve.
+ * unit of a parked task the description matches); a tier no worker model is
+ * on for (`req.models`, absent meaning all on); the call's tier (worker type)
+ * against the unit's, and its model against the model the settings give that
+ * tier; a rejected unit; a barred (tier, kind); a third run at one tier (runs
+ * of the same unit id in the active task only, counted by `runTier`); a kind
+ * the tier no longer takes; a missing spec file; a context item that did not
+ * resolve.
  */
 export function spawnCheck(board: Board, req: SpawnRequest): string | null {
   if (req.fork && !req.nested) return denyFork()
@@ -1186,19 +1217,23 @@ export function spawnCheck(board: Board, req: SpawnRequest): string | null {
     if (given(req.name)) return denyUndeclared(req.name)
     return denyUndeclared(null, u === null ? parkedMatch(board, req.description) : null)
   }
+  const models = req.models ?? ALL_ON
+  const runsOn = models[tier]
+  if (runsOn === null) return denyUnavailable(u.id, tier, models)
   if (req.workerTier !== null && req.workerTier !== undefined) {
     if (req.workerTier !== tier) return denyWrongWorker(u.id, tier, req.workerTier)
-    if (given(req.model) && modelTier(req.model) !== req.workerTier) return denyModelOverride(req.workerTier, req.model)
-  } else if (modelTier(req.model) !== tier) {
-    return denyNoModel(u.id, tier)
+    if (given(req.model) && modelTier(req.model) !== runsOn) return denyModelOverride(req.workerTier, runsOn, req.model)
+  } else if (modelTier(req.model) !== runsOn) {
+    return denyNoModel(u.id, tier, runsOn)
   }
   if (u.verdict === 'rejected') return denyRejected(u.id)
   const bar = barred(board).find(x => x.tier === tier && x.kind === u.kind)
   if (bar) return denyBarred(tier, bar.kind, bar.n)
   const runs = Object.values(board.agents).filter(
-    b => b.id !== MAIN_ID && carries(board, b, board.taskId, u.id) && tierOf(board, b) === tier,
+    b => b.id !== MAIN_ID && carries(board, b, board.taskId, u.id) && runTier(board, b) === tier,
   )
   if (runs.length >= 2) return denyRetry(u.id, tier)
+  if (!KINDS_BY_TIER[tier].includes(u.kind)) return denyKind(u.id, tier, u.kind)
   if (req.specMissing) return denySpec(u.id, u.spec ?? '')
   if (given(req.contextMissing)) return denyContext(u.id, req.contextMissing)
   return null

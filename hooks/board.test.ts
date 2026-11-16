@@ -319,10 +319,27 @@ describe('parseBoardUpdate: a unit with a tier', () => {
     expect(refused({ units: [tiered('s', { tier: 3 })] })).toBe(`${at}field "tier" must be one of opus, sonnet, haiku, got 3`)
   })
 
-  test('haiku takes its five kinds', () => {
-    for (const kind of ['locate', 'extract', 'execute', 'inventory', 'edit']) {
+  test('haiku takes its three kinds', () => {
+    for (const kind of ['locate', 'extract', 'inventory']) {
       expect(accepted({ units: [tiered('s', { kind })] }).units?.[0]?.kind).toBe(kind)
     }
+  })
+  test('refuses a haiku unit of kind execute or edit that has no verdict', () => {
+    for (const kind of ['execute', 'edit']) {
+      expect(refused({ units: [tiered('s', { kind })] })).toBe(
+        `${at}kind "${kind}" is not a haiku task type (haiku takes locate, extract, inventory); route the unit to a higher tier`,
+      )
+    }
+  })
+  test('accepts a haiku unit of kind execute or edit that carries a verdict', () => {
+    for (const kind of ['execute', 'edit']) {
+      for (const verdict of ['accepted', 'rejected']) {
+        expect(accepted({ units: [tiered('s', { kind, verdict })] }).units?.[0]?.kind).toBe(kind)
+      }
+    }
+  })
+  test('accepts a sonnet unit of kind execute', () => {
+    expect(accepted({ units: [tiered('s', { tier: 'sonnet', kind: 'execute', audit: auditFor('sonnet') })] }).units?.[0]?.kind).toBe('execute')
   })
   test('sonnet takes the haiku kinds and its seven', () => {
     for (const kind of ['locate', 'extract', 'execute', 'inventory', 'edit', 'implement', 'tests', 'fix', 'explore', 'summarize', 'review', 'docs']) {
@@ -335,7 +352,7 @@ describe('parseBoardUpdate: a unit with a tier', () => {
     }
   })
   test('refuses a unit with a tier and no kind, listing that tier\'s kinds', () => {
-    const haiku = `${at}a haiku unit needs field "kind", one of locate, extract, execute, inventory, edit`
+    const haiku = `${at}a haiku unit needs field "kind", one of locate, extract, inventory`
     expect(refused({ units: [tiered('s', { kind: undefined })] })).toBe(haiku)
     expect(refused({ units: [tiered('s', { kind: null })] })).toBe(haiku)
     expect(refused({ units: [tiered('s', { tier: 'sonnet', kind: null, audit: auditFor('sonnet') })] })).toBe(
@@ -347,10 +364,10 @@ describe('parseBoardUpdate: a unit with a tier', () => {
   })
   test('refuses a kind of a higher tier, saying to route upward', () => {
     expect(refused({ units: [tiered('s', { kind: 'summarize' })] })).toBe(
-      `${at}kind "summarize" is not a haiku task type (haiku takes locate, extract, execute, inventory, edit); route the unit to a higher tier`,
+      `${at}kind "summarize" is not a haiku task type (haiku takes locate, extract, inventory); route the unit to a higher tier`,
     )
     expect(refused({ units: [tiered('s', { kind: 'design' })] })).toBe(
-      `${at}kind "design" is not a haiku task type (haiku takes locate, extract, execute, inventory, edit); route the unit to a higher tier`,
+      `${at}kind "design" is not a haiku task type (haiku takes locate, extract, inventory); route the unit to a higher tier`,
     )
     expect(refused({ units: [tiered('s', { tier: 'sonnet', kind: 'debug', audit: auditFor('sonnet') })] })).toBe(
       `${at}kind "debug" is not a sonnet task type (sonnet takes locate, extract, execute, inventory, edit, implement, tests, fix, explore, summarize, review, docs); route the unit to a higher tier`,
@@ -358,7 +375,7 @@ describe('parseBoardUpdate: a unit with a tier', () => {
   })
   test('refuses something that is no kind at all', () => {
     expect(refused({ units: [tiered('s', { kind: 'refactor' })] })).toBe(
-      `${at}field "kind" must be one of locate, extract, execute, inventory, edit, got "refactor"`,
+      `${at}field "kind" must be one of locate, extract, inventory, got "refactor"`,
     )
     expect(refused({ units: [tiered('s', { tier: 'opus', kind: 3, audit: auditFor('opus') })] })).toBe(
       `${at}field "kind" must be one of locate, extract, execute, inventory, edit, implement, tests, fix, explore, summarize, review, docs, design, debug, got 3`,
@@ -701,3 +718,17 @@ describe('withFlowestraSections', () => {
 // `command.register`, and an inline plugin is loaded as a separate module that
 // cannot pass `$` to a helper from this mod, so they are exercised only once
 // register.tsx (U4) wires them into the plugin under test.
+
+describe('withFlowestraSections with a models note', () => {
+  test('the note goes into the policy section and no section is added', () => {
+    const plain = withFlowestraSections([], 'full')
+    const out = withFlowestraSections([], 'full', 'A note.')
+    expect(out.length).toBe(plain.length)
+    expect(out.map(s => s.id)).toEqual(plain.map(s => s.id))
+    const policy = out.find(s => s.id === POLICY_SECTION_ID)
+    expect(policy?.text).toBe(`${ROUTING_POLICY_SECTION.text}\n\nA note.`)
+  })
+  test('an empty note gives the same sections as no argument', () => {
+    expect(withFlowestraSections([], 'light', '')).toEqual(withFlowestraSections([], 'light'))
+  })
+})

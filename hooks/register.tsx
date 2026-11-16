@@ -69,11 +69,17 @@
 // that repository. Nothing else of a spawn is changed. Every other bit of
 // bookkeeping is wrapped, so a failure inside it still hands on what `next(e)`
 // gave.
+//
+// Worker models (0.10.0): the three settings opusWorkers, sonnetWorkers and
+// haikuWorkers say which model runs each tier's work; models.ts derives it from
+// the options, once, in `register`, and it reaches the worker registration, the
+// spawn gate, the board's spawn bookkeeping and the prompt note. The mod never
+// changes the main session's model.
 
 import { atom, read, update } from 'claude-code'
 import type { AgentSpawnInput, EngineInterface, Register, Timer, TurnUsage } from 'claude-code'
 
-import type { Board, LogEntry, TaskSlot, Unit, Verdict } from '../types'
+import type { Board, LogEntry, TaskSlot, Unit, Verdict, WorkerModels } from '../types'
 import { failOpen } from './guard'
 import {
   auditPath,
@@ -118,6 +124,7 @@ import {
   wantsBoardSection,
   withFlowestraSections,
 } from './board'
+import { modelsFromOptions, modelsNote } from './models'
 import { workflowMode } from './workflow'
 import type { BoardToggleResult, BoardUpdate } from './board'
 import {
@@ -146,6 +153,7 @@ import {
   reconcile,
   resetBoard,
   rowAgents,
+  runTier,
   shownBoxes,
   slotOf,
   spawnCheck,
@@ -370,8 +378,8 @@ async function openPane($: EngineInterface): Promise<boolean> {
 
 // ---------------------------------------------------------------- bookkeeping per event
 
-async function onSessionStart($: EngineInterface): Promise<void> {
-  await registerWorkers($) // never throws
+async function onSessionStart($: EngineInterface, models: WorkerModels): Promise<void> {
+  await registerWorkers($, models) // never throws
   const at = await now($)
   const board = await read($, boardAtom)
   if (board.loadedAt === 0) await update($, boardAtom, () => resetBoard(at))
@@ -409,6 +417,7 @@ type SpawnSeen = {
   promptChars: number
   prompt: string
   resumed: boolean
+  models: WorkerModels
 }
 
 /** Whether a spec path names no file on disk; false when the check itself fails (the gate fails open). */
@@ -428,7 +437,7 @@ type SpawnFields = Pick<
  * start (state.ts's spawnCheck). Runs inside failOpen: any error here means no
  * refusal.
  */
-async function spawnRefusal($: EngineInterface, e: SpawnFields, contextMissing: string | null): Promise<string | null> {
+async function spawnRefusal($: EngineInterface, e: SpawnFields, contextMissing: string | null, models: WorkerModels): Promise<string | null> {
   return failOpen(async () => {
     const board = await read($, boardAtom)
     const unit = coveringUnit(board, { name: e.name, description: e.description })
@@ -442,6 +451,7 @@ async function spawnRefusal($: EngineInterface, e: SpawnFields, contextMissing: 
       workflow: e.workflow !== undefined,
       resume: e.resume !== undefined,
       nested: e.parentAgentId !== undefined,
+      models,
       specMissing: unit !== null ? await specIsMissing($, unit.spec) : false,
       contextMissing,
     })
@@ -1268,6 +1278,7 @@ async function onSpawn($: EngineInterface, seen: SpawnSeen): Promise<void> {
         parentAgentId: seen.parentAgentId ?? null,
         promptChars: seen.promptChars,
         resumed: seen.resumed,
+        models: seen.models,
       },
       at,
     ),
@@ -1386,11 +1397,12 @@ async function trackedLine($: EngineInterface): Promise<string> {
     const tail = `${ended > 0 ? ` | other tasks: ${ended} ended` : ''}${bars.length > 0 ? ` | barred: ${bars.map(x => `${x.tier} ${x.kind}`).join(', ')}` : ''}`
     if (workers.length === 0) return `tracked workers: none${tail}`
     const parts = workers.map(w => {
-      const tier = tierOf(board, w)
+      const tier = runTier(board, w)
+      const ranOn = tierOf(board, w)
       const other = otherTaskOf(board, w)
       const issue = auditIssue(board, w)
       const mark = issue === 'no-audit' ? ', NO AUDIT' : issue === 'tier-mismatch' ? ', TIER MISMATCH' : ''
-      return `${w.label} [${w.status}${tier !== null ? `, ${tier}` : ''}${mark}${w.unitId ? `, unit ${w.unitId}` : ''}${w.tokens ? '' : ', no tokens'}${other !== null ? `, task ${other}` : ''}]`
+      return `${w.label} [${w.status}${tier !== null ? `, ${tier}${ranOn !== null && ranOn !== tier && issue !== 'tier-mismatch' ? ` on ${ranOn}` : ''}` : ''}${mark}${w.unitId ? `, unit ${w.unitId}` : ''}${w.tokens ? '' : ', no tokens'}${other !== null ? `, task ${other}` : ''}]`
     })
     return `tracked workers: ${parts.join('; ')}${tail}`
   } catch {
@@ -1453,11 +1465,12 @@ async function wantsBand($: EngineInterface): Promise<boolean> {
 
 export const register: Register = (on, options) => {
   const mode = workflowMode(options)
+  const models = modelsFromOptions(options)
   on('session.start', async ($, e, next) => {
     await registerBoardTool($)
     await registerBoardCommand($)
     try {
-      await onSessionStart($)
+      await onSessionStart($, models)
     } catch {
       // the board stays as it was
     }
@@ -1543,7 +1556,7 @@ export const register: Register = (on, options) => {
     // the covering unit's context, resolved (W3); fails open: null
     const context = await spawnContext($, e)
     // the Model Routing Policy's spawn gate (§1, §8, §9, spec on disk, context); fails open
-    const refusal = await spawnRefusal($, e, context?.missing ?? null)
+    const refusal = await spawnRefusal($, e, context?.missing ?? null, models)
     if (refusal !== null) {
       try {
         await logRefusal($, e.name ?? e.description)
@@ -1573,6 +1586,7 @@ export const register: Register = (on, options) => {
           promptChars: e.prompt.length,
           prompt: e.prompt,
           resumed: e.resume !== undefined,
+          models,
         })
       }
     } catch {
@@ -1655,7 +1669,7 @@ export const register: Register = (on, options) => {
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
     if (!wantsBoardSection(e.traits)) return composed
-    return { sections: withFlowestraSections(composed.sections, mode) }
+    return { sections: withFlowestraSections(composed.sections, mode, modelsNote(models)) }
   })
 
   // The pane. On the terminal the flow diagram is the surface module, keyed

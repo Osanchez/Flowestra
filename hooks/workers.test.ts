@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { ALL_ON } from './models'
 import { BLOCKED_RULE, HAIKU_SCHEMA, OPUS_SCHEMA_NOTE, SONNET_SCHEMA } from './policy'
 import {
   OPUS_DISALLOWED,
   PLUGIN_NAME,
+  WORKER_DESCRIPTIONS,
   WORKER_NAMES,
   WORKER_TOOLS,
   tierOfWorkerType,
@@ -43,7 +45,7 @@ describe('names and types', () => {
 
 describe('tools', () => {
   test('haiku and sonnet lists, opus disallowed', () => {
-    expect([...WORKER_TOOLS.haiku]).toEqual(['Read', 'Bash', 'Edit'])
+    expect([...WORKER_TOOLS.haiku]).toEqual(['Read', 'Grep', 'Glob'])
     expect([...WORKER_TOOLS.sonnet]).toEqual(['Read', 'Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch'])
     expect([...OPUS_DISALLOWED]).toEqual(['Agent', 'Workflow'])
   })
@@ -109,7 +111,7 @@ describe('workerSpecs', () => {
     expect(opus?.prompt).toBe(workerPrompt('opus'))
   })
   test('tools on haiku and sonnet, disallowedTools on opus', () => {
-    expect(haiku?.tools).toEqual(['Read', 'Bash', 'Edit'])
+    expect(haiku?.tools).toEqual(['Read', 'Grep', 'Glob'])
     expect(haiku?.disallowedTools).toBeUndefined()
     expect(sonnet?.tools).toEqual(['Read', 'Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch'])
     expect(sonnet?.disallowedTools).toBeUndefined()
@@ -123,7 +125,7 @@ describe('workerSpecs', () => {
   })
   test('the descriptions', () => {
     expect(haiku?.description).toBe(
-      'Haiku tier of the Model Routing Policy: one mechanical task (locate, extract, execute and report, inventory, mechanical edit) whose brief pins targets, scope and output format. Returns leads, never conclusions.',
+      'Haiku tier of the Model Routing Policy: one read-only task (locate, extract, inventory) whose brief pins targets, scope and output format. Reads and searches only: no shell, no edits. Returns leads, never conclusions.',
     )
     expect(sonnet?.description).toBe(
       'Sonnet tier of the Model Routing Policy: specified work in one repo and one functional area, with written acceptance criteria and a named check. Returns a draft the orchestrator verifies.',
@@ -137,3 +139,57 @@ describe('workerSpecs', () => {
 // Not covered here: registerWorkers. The test's own `$` has no
 // `agent.register`, so it is exercised only once register.tsx wires it into
 // the plugin under test.
+
+describe('workerSpecs with models', () => {
+  test('all on (and no argument) gives the three tier specs on their own models', () => {
+    const expected = [
+      {
+        name: 'haiku-worker',
+        description: WORKER_DESCRIPTIONS.haiku,
+        prompt: workerPrompt('haiku'),
+        model: 'haiku',
+        tools: ['Read', 'Grep', 'Glob'],
+        omitClaudeMd: true,
+      },
+      {
+        name: 'sonnet-worker',
+        description: WORKER_DESCRIPTIONS.sonnet,
+        prompt: workerPrompt('sonnet'),
+        model: 'sonnet',
+        tools: ['Read', 'Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch'],
+      },
+      {
+        name: 'opus-worker',
+        description: WORKER_DESCRIPTIONS.opus,
+        prompt: workerPrompt('opus'),
+        model: 'opus',
+        disallowedTools: ['Agent', 'Workflow'],
+      },
+    ]
+    expect(workerSpecs()).toEqual(expected)
+    expect(workerSpecs(ALL_ON)).toEqual(expected)
+  })
+  test('Opus off: the opus spec runs on Sonnet and keeps its tier contract', () => {
+    const specs = workerSpecs({ opus: 'sonnet', sonnet: 'sonnet', haiku: 'haiku' })
+    expect(specs).toHaveLength(3)
+    const opus = specs.find(s => s.name === 'opus-worker')!
+    expect(opus.model).toBe('sonnet')
+    expect(opus.disallowedTools).toEqual(['Agent', 'Workflow'])
+    expect('tools' in opus).toBe(false)
+    expect(opus.prompt).toBe(workerPrompt('opus'))
+    expect(opus.description).toBe(`${WORKER_DESCRIPTIONS.opus} Runs on Sonnet: Opus is switched off in the Flowestra settings.`)
+    expect(opus.description.endsWith('Runs on Sonnet: Opus is switched off in the Flowestra settings.')).toBe(true)
+  })
+  test('Haiku off: the haiku spec runs on Sonnet, read-only', () => {
+    const haiku = workerSpecs({ opus: 'opus', sonnet: 'sonnet', haiku: 'sonnet' }).find(s => s.name === 'haiku-worker')!
+    expect(haiku.model).toBe('sonnet')
+    expect(haiku.tools).toEqual(['Read', 'Grep', 'Glob'])
+    expect(haiku.omitClaudeMd).toBe(true)
+    expect(haiku.prompt).toBe(workerPrompt('haiku'))
+    expect(haiku.description.endsWith('Runs on Sonnet: Haiku is switched off in the Flowestra settings.')).toBe(true)
+  })
+  test('unavailable tiers are left out', () => {
+    expect(workerSpecs({ opus: null, sonnet: null, haiku: 'haiku' }).map(s => s.name)).toEqual(['haiku-worker'])
+    expect(workerSpecs({ opus: null, sonnet: null, haiku: null })).toEqual([])
+  })
+})

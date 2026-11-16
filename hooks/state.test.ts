@@ -1,8 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { AgentBox, Board, TaskKind, TaskSlot, Tier, TierReject, Unit } from '../types'
+import type { AgentBox, Board, Routed, TaskKind, TaskSlot, Tier, TierReject, Unit, WorkerModels } from '../types'
 import {
   BARRED_TIERS,
+  BOARD_SHAPE,
   BAR_AFTER,
   EXEMPT_TYPES,
   LINGER_DONE_MS,
@@ -28,11 +29,13 @@ import {
   denyBuiltin,
   denyContext,
   denyFork,
+  denyKind,
   denyModelOverride,
   denyNoModel,
   denyRejected,
   denyRetry,
   denySpec,
+  denyUnavailable,
   denyUndeclared,
   denyWrongWorker,
   emptyBoard,
@@ -62,6 +65,7 @@ import {
   rowLeads,
   rowOf,
   rowWorkers,
+  runTier,
   shortModel,
   shownBoxes,
   slotOf,
@@ -76,6 +80,7 @@ import {
   withdrawn,
 } from './state'
 import type { BoardUpdate, SpawnRequest } from './state'
+import { ALL_ON } from './models'
 
 const T0 = 1_000_000
 const box = (b: Board, id: string): AgentBox => {
@@ -398,7 +403,7 @@ test('resetBoard empties everything', () => {
 
 test('a reload keeps the tallies: the board is plain data under a shape tag', () => {
   // $.state keeps the value whole across a hot reload; the atom's tag decides whether new code takes it.
-  expect(boardAtom.shape).toBe('board-5')
+  expect(boardAtom.shape).toBe('board-6')
   expect(boardAtom.initial).toEqual(emptyBoard(0))
   const before = applyStep(applyStep(spawned(emptyBoard(T0), 'a'), 'a', usage(1, 2, 3, 4), T0), undefined, usage(5, 6, 7, 8), T0)
   const reloaded = JSON.parse(JSON.stringify(before)) as Board
@@ -1159,14 +1164,14 @@ test('spawnCheck rule 5: the tier of the call against the unit', () => {
   expect(spawnCheck(b, sonnetReq({ name: 'H' }))).toBe(denyWrongWorker('H', 'haiku', 'sonnet'))
   // the right worker with another tier's model
   const override = 'Spawn refused (policy §1): the haiku worker runs on haiku; do not pass model "opus".'
-  expect(denyModelOverride('haiku', 'opus')).toBe(override)
+  expect(denyModelOverride('haiku', 'haiku', 'opus')).toBe(override)
   expect(spawnCheck(b, req({ name: 'H', model: 'opus' }))).toBe(override)
-  expect(spawnCheck(b, req({ name: 'H', model: 'claude-x' }))).toBe(denyModelOverride('haiku', 'claude-x'))
+  expect(spawnCheck(b, req({ name: 'H', model: 'claude-x' }))).toBe(denyModelOverride('haiku', 'haiku', 'claude-x'))
   // the wrong worker is checked before the model
   expect(spawnCheck(b, req({ name: 'S', model: 'opus' }))).toBe(wrong)
   // another agent type must name the unit's tier as its model
   const noModel = 'Spawn refused (policy §1): unit "S" is routed to sonnet; an agent type other than the tier workers must name model "sonnet" in the call.'
-  expect(denyNoModel('S', 'sonnet')).toBe(noModel)
+  expect(denyNoModel('S', 'sonnet', 'sonnet')).toBe(noModel)
   const other = (over: Partial<SpawnRequest>) => spawnCheck(b, { subagentType: 'my-plugin:helper', workerTier: null, name: 'S', ...over })
   expect(other({})).toBe(noModel)
   expect(other({ model: null })).toBe(noModel)
@@ -1580,9 +1585,9 @@ test('routed: recorded at spawn from the covering unit when it has a tier, a kin
     unit('NT'),
   ]
   const b = up(emptyBoard(T0), { taskId: 't1', units })
-  expect(box(sonnetSpawn(b, 'a', 'S'), 'a').routed).toEqual({ tier: 'sonnet', kind: 'implement', audit: auditFor('sonnet') })
+  expect(box(sonnetSpawn(b, 'a', 'S'), 'a').routed).toEqual({ tier: 'sonnet', kind: 'implement', audit: auditFor('sonnet'), ranOn: 'sonnet' })
   // linked by label: recorded too
-  expect(box(sonnetSpawn(b, 'a', undefined), 'a').routed).toEqual({ tier: 'sonnet', kind: 'implement', audit: auditFor('sonnet') })
+  expect(box(sonnetSpawn(b, 'a', undefined), 'a').routed).toEqual({ tier: 'sonnet', kind: 'implement', audit: auditFor('sonnet'), ranOn: 'sonnet' })
   expect(box(sonnetSpawn(b, 'a', 'NA'), 'a').routed).toBeNull()
   expect(box(sonnetSpawn(b, 'a', 'NK'), 'a').routed).toBeNull()
   expect(box(sonnetSpawn(b, 'a', 'NT'), 'a').routed).toBeNull()
@@ -1800,4 +1805,136 @@ test('spawnCheck rule 4: with no name, a description matching one unit of a park
   expect(spawnCheck(b, sonnetReq({ name: 'J1', description: 'Write the journal' }))).toBe(denyUndeclared('J1'))
   expect(coveringUnit(b, { name: 'J1' })).toBeNull()
   expect(coveringUnit(b, { description: 'Write the journal' })).toBeNull()
+})
+
+// ---- worker models (0.10.0) ----
+
+const OPUS_OFF: WorkerModels = { opus: 'sonnet', sonnet: 'sonnet', haiku: 'haiku' }
+const OPUS_SONNET_OFF: WorkerModels = { opus: 'haiku', sonnet: 'haiku', haiku: 'haiku' }
+const NONE_ON: WorkerModels = { opus: null, sonnet: null, haiku: null }
+const opusReq = (over: Partial<SpawnRequest> = {}) => req({ subagentType: 'flowestra:opus-worker', workerTier: 'opus', name: 'O', ...over })
+const routedBox = (id: string, unitId: string, model: string | null, routed: Routed | null): AgentBox => ({
+  ...mk(id, 'done', T0 + 1, unitId),
+  model,
+  routed,
+})
+const AUDIT = 'find the callers | opus | §1 | re-read'
+
+test('the board shape tag is board-6', () => {
+  expect(BOARD_SHAPE).toBe('board-6')
+})
+
+test('spawnCheck with Opus off: the opus worker runs on sonnet; a model parameter must be sonnet', () => {
+  const b = gateBoard()
+  expect(spawnCheck(b, opusReq({ models: OPUS_OFF }))).toBeNull()
+  expect(spawnCheck(b, opusReq({ models: OPUS_OFF, model: 'sonnet' }))).toBeNull()
+  const text = spawnCheck(b, opusReq({ models: OPUS_OFF, model: 'opus' }))
+  expect(text).toBe(
+    'Spawn refused (policy §1): the opus worker runs on sonnet (Opus is switched off in the Flowestra settings); do not pass model "opus".',
+  )
+  expect(text).toBe(denyModelOverride('opus', 'sonnet', 'opus'))
+  // all on: byte-identical to 0.9
+  expect(denyModelOverride('opus', 'opus', 'sonnet')).toBe('Spawn refused (policy §1): the opus worker runs on opus; do not pass model "sonnet".')
+  expect(spawnCheck(b, opusReq({ model: 'sonnet' }))).toBe(denyModelOverride('opus', 'opus', 'sonnet'))
+  expect(spawnCheck(b, opusReq({ models: ALL_ON }))).toBeNull()
+})
+
+test('spawnCheck with Opus off: another agent type must name the model the tier runs on', () => {
+  const b = gateBoard()
+  const other = (over: Partial<SpawnRequest>) => ({ subagentType: 'my-agent', workerTier: null, name: 'O', ...over }) as SpawnRequest
+  expect(spawnCheck(b, other({ models: OPUS_OFF, model: 'sonnet' }))).toBeNull()
+  expect(spawnCheck(b, other({ models: OPUS_OFF, model: 'opus' }))).toBe(denyNoModel('O', 'opus', 'sonnet'))
+  expect(denyNoModel('O', 'opus', 'sonnet')).toBe(
+    'Spawn refused (policy §1): unit "O" is routed to opus; an agent type other than the tier workers must name model "sonnet" in the call.',
+  )
+  expect(spawnCheck(b, other({ model: 'opus' }))).toBeNull()
+  expect(spawnCheck(b, other({}))).toBe(denyNoModel('O', 'opus', 'opus'))
+})
+
+test('spawnCheck: no worker model on for the tier is refused with denyUnavailable', () => {
+  const b = gateBoard()
+  const opusText =
+    'Spawn refused: unit "O" is routed to opus, and no worker model is on for opus-tier work (the Flowestra settings switch off Opus and Sonnet). Do that work yourself, or ask the user to turn a worker model back on in /config.'
+  const models: WorkerModels = { opus: null, sonnet: null, haiku: 'haiku' }
+  expect(spawnCheck(b, opusReq({ models }))).toBe(opusText)
+  expect(denyUnavailable('O', 'opus', models)).toBe(opusText)
+  const sonnetText =
+    'Spawn refused: unit "S" is routed to sonnet, and no worker model is on for sonnet-tier work (the Flowestra settings switch off Opus and Sonnet). Do that work yourself, or ask the user to turn a worker model back on in /config.'
+  expect(spawnCheck(b, sonnetReq({ name: 'S', models }))).toBe(sonnetText)
+  expect(denyUnavailable('H', 'haiku', NONE_ON)).toContain('(the Flowestra settings switch off Opus, Sonnet and Haiku)')
+  // before the worker-tier check: the wrong worker for an unavailable tier gets the unavailable text
+  expect(spawnCheck(b, sonnetReq({ name: 'O', models }))).toBe(opusText)
+  // a unit of a tier that is available is unaffected
+  expect(spawnCheck(b, req({ name: 'H', models }))).toBeNull()
+})
+
+test('spawnCheck: the retry count is by runTier, so a substituted run counts at the tier of the work', () => {
+  const b0 = gateBoard()
+  const a = routedBox('a', 'O', 'claude-opus-5-5', { tier: 'opus', kind: 'design', audit: AUDIT })
+  const c = routedBox('c', 'O', 'claude-sonnet-5-5', { tier: 'opus', kind: 'design', audit: AUDIT, ranOn: 'sonnet' })
+  const b = { ...b0, ...withAgents(b0, a, c) }
+  expect(spawnCheck(b, opusReq({ models: OPUS_OFF }))).toBe(denyRetry('O', 'opus'))
+  const one = { ...b0, ...withAgents(b0, c) }
+  expect(spawnCheck(one, opusReq({ models: OPUS_OFF }))).toBeNull()
+})
+
+test('spawnCheck: a haiku unit of a kind haiku no longer takes is refused with denyKind', () => {
+  const b0 = { ...gateBoard(), units: [tiered('HE', 'haiku', { kind: 'edit' })] }
+  const text = spawnCheck(b0, req({ name: 'HE' }))
+  expect(text).toBe(
+    'Spawn refused (policy §3): unit "HE" is a haiku unit of kind edit, which haiku no longer takes (haiku takes locate, extract, inventory). Re-route it to a higher tier under a new unit.',
+  )
+  expect(text).toBe(denyKind('HE', 'haiku', 'edit'))
+  // after the retry check, before the spec check
+  const spec = { ...b0, units: [tiered('HE', 'haiku', { kind: 'edit', spec: 'x.md' })] }
+  expect(spawnCheck(spec, req({ name: 'HE', specMissing: true }))).toBe(denyKind('HE', 'haiku', 'edit'))
+  expect(spawnCheck(gateBoard(), req({ name: 'H' }))).toBeNull()
+})
+
+test('runTier: a substituted run is the tier of its work; a wrong model keeps the measured tier', () => {
+  const b = emptyBoard(T0)
+  const sub = routedBox('a', 'O', 'claude-sonnet-5-5', { tier: 'opus', kind: 'design', audit: AUDIT, ranOn: 'sonnet' })
+  expect(runTier(b, sub)).toBe('opus')
+  const wrong = routedBox('b', 'S', HAIKU, { tier: 'sonnet', kind: 'implement', audit: AUDIT })
+  expect(runTier(b, wrong)).toBe('haiku')
+  const wrong2 = routedBox('c', 'O', HAIKU, { tier: 'opus', kind: 'design', audit: AUDIT, ranOn: 'sonnet' })
+  expect(runTier(b, wrong2)).toBe('haiku')
+  expect(runTier(b, routedBox('d', 'O', null, { tier: 'opus', kind: 'design', audit: AUDIT, ranOn: 'sonnet' }))).toBe('opus')
+  expect(runTier(b, { ...mk(MAIN_ID, 'running'), model: SONNET })).toBeNull()
+})
+
+test('auditIssue: a substituted run is not a mismatch; a wrong model is', () => {
+  const b = emptyBoard(T0)
+  const sub = routedBox('a', 'O', SONNET, { tier: 'opus', kind: 'design', audit: AUDIT, ranOn: 'sonnet' })
+  expect(auditIssue(b, sub)).toBe('none')
+  const wrong = routedBox('b', 'O', HAIKU, { tier: 'opus', kind: 'design', audit: AUDIT, ranOn: 'sonnet' })
+  expect(auditIssue(b, wrong)).toBe('tier-mismatch')
+  const plain = routedBox('c', 'O', SONNET, { tier: 'opus', kind: 'design', audit: AUDIT })
+  expect(auditIssue(b, plain)).toBe('tier-mismatch')
+})
+
+test('rowOf: a haiku-tier box that ran on Sonnet is in the leads row', () => {
+  const b = emptyBoard(T0)
+  const x = routedBox('a', 'H', SONNET, { tier: 'haiku', kind: 'locate', audit: AUDIT, ranOn: 'sonnet' })
+  expect(rowOf(b, x)).toBe('leads')
+  expect(rowOf(b, routedBox('b', 'S', SONNET, { tier: 'sonnet', kind: 'implement', audit: AUDIT }))).toBe('workers')
+})
+
+test('applySpawn records ranOn from the models; a resumed spawn keeps the old routed', () => {
+  const b0 = { ...gateBoard(), taskId: null }
+  const spawnWith = (board: Board, agentId: string, name: string, models?: WorkerModels, resumed?: boolean) =>
+    applySpawn(board, { agentId, description: 'x', subagentType: 'flowestra:opus-worker', model: SONNET, name, models, resumed }, T0)
+  const o = spawnWith(b0, 'a1', 'O', OPUS_OFF)
+  expect(box(o, 'a1').routed?.ranOn).toBe('sonnet')
+  const h = spawnWith(b0, 'a2', 'H', { opus: 'opus', sonnet: 'opus', haiku: 'sonnet' })
+  expect(box(h, 'a2').routed?.ranOn).toBe('sonnet')
+  const hh = spawnWith(b0, 'a3', 'H', { opus: 'sonnet', sonnet: 'sonnet', haiku: 'sonnet' })
+  expect(box(hh, 'a3').routed?.ranOn).toBe('sonnet')
+  expect(box(spawnWith(b0, 'a4', 'H'), 'a4').routed?.ranOn).toBe('haiku')
+  // Opus-off and Sonnet-off: a haiku unit stays haiku
+  expect(box(spawnWith(b0, 'a5', 'H', OPUS_SONNET_OFF), 'a5').routed?.ranOn).toBe('haiku')
+  // resumed: keeps the old routed and its ranOn, whatever the models now are
+  const again = spawnWith(o, 'a1', 'O', ALL_ON, true)
+  expect(box(again, 'a1').routed).toEqual(box(o, 'a1').routed)
+  expect(box(again, 'a1').routed?.ranOn).toBe('sonnet')
 })

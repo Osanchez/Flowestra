@@ -557,3 +557,20 @@ test('logDiff: spawned shows the kind recorded at spawn (routed) before its unit
     'spawned · Opus 5.5 · design',
   ])
 })
+
+// ---- a worker model switched off (0.10.0) ----
+
+test('logDiff: a substituted run spawns as "opus→Sonnet 5.5 · design" and a done sonnet-model run of opus work is no draft', () => {
+  const routed = { tier: 'opus' as const, kind: 'design' as const, audit: OPUS_AUDIT, ranOn: 'sonnet' as const }
+  const run = mk('s', { model: SONNET, unitId: 'u1', routed })
+  const spawned = boardOf([run], { units: [unit('u1')] })
+  expect(logDiff(boardOf([]), spawned, AT).filter(e => e.kind === 'spawned').map(e => e.text)).toEqual(['spawned · opus→Sonnet 5.5 · design'])
+  const done = boardOf([{ ...run, status: 'done', endedAt: AT, startedAt: AT - 5000 }], { units: [unit('u1')] })
+  expect(logDiff(spawned, done, AT).find(e => e.kind === 'done')?.text).not.toContain('draft')
+})
+
+test('logDiff: opus work substituted to sonnet but run on Haiku logs "unit says opus on sonnet"', () => {
+  const routed = { tier: 'opus' as const, kind: 'design' as const, audit: OPUS_AUDIT, ranOn: 'sonnet' as const }
+  const after = boardOf([mk('h', { model: HAIKU, unitId: 'u1', routed })], { units: [unit('u1')] })
+  expect(logDiff(boardOf([]), after, AT).filter(e => e.kind === 'audit').map(e => e.text)).toEqual(['ran on Haiku 5.5, unit says opus on sonnet'])
+})

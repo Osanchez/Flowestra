@@ -22,6 +22,7 @@ import {
   KINDS_BY_TIER,
   POLICY_SECTION_ID,
   ROUTING_POLICY_SECTION,
+  routingPolicySection,
   SPEC_MAX_CHARS,
   TIERS,
   VERDICTS,
@@ -74,6 +75,7 @@ const UPDATE_FIELDS = ['task', 'taskId', 'repo', 'close', 'phase', 'wave', 'unit
 const UNIT_FIELDS = ['id', 'label', 'wave', 'dependsOn', 'declared', 'tier', 'kind', 'audit', 'verdict', 'spec', 'context'] as const
 // Every task type, in tier order (the opus list holds them all).
 const ALL_KINDS: readonly TaskKind[] = KINDS_BY_TIER.opus
+const RETIRED_HAIKU_KINDS: readonly TaskKind[] = ['execute', 'edit']
 const AUDIT_FORMAT = '<task> | <tier> | <§1 step and conditions that selected it> | <what catches an error>'
 
 export const BOARD_TOOL = 'AgentBoard'
@@ -198,10 +200,16 @@ function parseUnit(raw: unknown, index: number): UnitParse {
     return { ok: false, reason: `${where}a ${tier} unit needs field "kind", one of ${kinds.join(', ')}` }
   }
   const rawKind = raw.kind
-  if (typeof rawKind === 'string' && (ALL_KINDS as readonly string[]).includes(rawKind) && !(kinds as readonly string[]).includes(rawKind)) {
+  // A resumed task's history may hold a haiku unit of a kind haiku lost in 0.10; with a verdict it is accepted as it is.
+  const retired =
+    tier === 'haiku' &&
+    typeof rawKind === 'string' &&
+    (RETIRED_HAIKU_KINDS as readonly string[]).includes(rawKind) &&
+    (raw.verdict === 'accepted' || raw.verdict === 'rejected')
+  if (!retired && typeof rawKind === 'string' && (ALL_KINDS as readonly string[]).includes(rawKind) && !(kinds as readonly string[]).includes(rawKind)) {
     return { ok: false, reason: `${where}kind "${rawKind}" is not a ${tier} task type (${tier} takes ${kinds.join(', ')}); route the unit to a higher tier` }
   }
-  if (typeof rawKind !== 'string' || !(kinds as readonly string[]).includes(rawKind)) {
+  if (typeof rawKind !== 'string' || (!retired && !(kinds as readonly string[]).includes(rawKind))) {
     return { ok: false, reason: `${where}field "kind" must be one of ${kinds.join(', ')}, got ${describeValue(rawKind)}` }
   }
   const kind = rawKind as TaskKind
@@ -455,7 +463,7 @@ export const BOARD_TOOL_DESCRIPTION = [
   '- close: true closes the active task.',
   `- phase: one of ${PHASES.join(', ')}.`,
   '- wave: the wave of workers now running or about to start, an integer from 1.',
-  '- units: the FULL list of work units (it replaces the previous list). Each unit: id (unique; give the Agent call that carries it out a `name` equal to this id, or, where the Agent tool takes no name, a description equal to the unit\'s label), label (1 to 4 words), wave (integer from 1), dependsOn (ids of units in this same list that must finish first; never the unit itself, no cycles; default []), declared (pending, done or failed: only for a unit you carry out yourself, which has no tier), and for a unit a worker carries out: tier (opus, sonnet or haiku: what the Model Routing Policy\'s §1 selected), kind (the task type; haiku: locate, extract, execute, inventory or edit; sonnet: those and implement, tests, fix, explore, summarize, review or docs; opus: any of those, design or debug), audit (the policy §9 line "<task> | <tier> | <§1 step and conditions that selected it> | <what catches an error>", its tier part naming the unit\'s tier), verdict (optional: accepted or rejected, sent once you have checked its output, policy §7), spec (optional: the path of the approved spec the unit builds from) and context (optional: up to 8 things the worker is given, each an absolute path, optionally with "#heading", or "<task-id>:<unit-id>" for that unit\'s newest journal entry; their text is placed in the worker\'s brief).',
+  '- units: the FULL list of work units (it replaces the previous list). Each unit: id (unique; give the Agent call that carries it out a `name` equal to this id, or, where the Agent tool takes no name, a description equal to the unit\'s label), label (1 to 4 words), wave (integer from 1), dependsOn (ids of units in this same list that must finish first; never the unit itself, no cycles; default []), declared (pending, done or failed: only for a unit you carry out yourself, which has no tier), and for a unit a worker carries out: tier (opus, sonnet or haiku: what the Model Routing Policy\'s §1 selected), kind (the task type; haiku: locate, extract or inventory; sonnet: those and execute, edit, implement, tests, fix, explore, summarize, review or docs; opus: any of those, design or debug), audit (the policy §9 line "<task> | <tier> | <§1 step and conditions that selected it> | <what catches an error>", its tier part naming the unit\'s tier), verdict (optional: accepted or rejected, sent once you have checked its output, policy §7), spec (optional: the path of the approved spec the unit builds from) and context (optional: up to 8 things the worker is given, each an absolute path, optionally with "#heading", or "<task-id>:<unit-id>" for that unit\'s newest journal entry; their text is placed in the worker\'s brief).',
   'A unit a worker carries out with no tier, no kind or no complete audit line is refused; a unit you carry out yourself has no tier and takes declared instead. A unit that uses another unit\'s results names it in its dependsOn.',
   'Running, blocked, done and token counts are measured by the board from the agents themselves: never send token counts or any other field.',
   'Invalid input is refused with the reason and the board keeps its previous value.',
@@ -626,9 +634,10 @@ export const BOARD_PROMPT_SECTION: PromptComposeSection = {
 export function withFlowestraSections(
   sections: readonly PromptComposeSection[],
   mode: WorkflowMode,
+  note = '',
 ): readonly PromptComposeSection[] {
   const added: PromptComposeSection[] = []
-  const wanted = [workflowSection(mode), BOARD_PROMPT_SECTION, ROUTING_POLICY_SECTION]
+  const wanted = [workflowSection(mode), BOARD_PROMPT_SECTION, routingPolicySection(note)]
   for (const section of wanted) {
     if (section !== null && !sections.some(existing => existing.id === section.id)) added.push(section)
   }

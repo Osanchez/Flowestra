@@ -12,17 +12,23 @@ import type { TaskKind, Tier } from '../types'
 
 export const TIERS: readonly Tier[] = ['opus', 'sonnet', 'haiku']
 
-// The task types a tier takes (policy §3, §4; design and debug are §2 triggers).
-export const HAIKU_KINDS: readonly TaskKind[] = ['locate', 'extract', 'execute', 'inventory', 'edit']
-export const SONNET_KINDS: readonly TaskKind[] = ['implement', 'tests', 'fix', 'explore', 'summarize', 'review', 'docs']
+// The task types a tier takes (policy §3, §4; design and debug are §2 triggers). execute and edit were Haiku's until 0.10.
+export const HAIKU_KINDS: readonly TaskKind[] = ['locate', 'extract', 'inventory']
+export const SONNET_KINDS: readonly TaskKind[] = ['execute', 'edit', 'implement', 'tests', 'fix', 'explore', 'summarize', 'review', 'docs']
 export const OPUS_KINDS: readonly TaskKind[] = ['design', 'debug']
 
 // A task escalated from a lower tier keeps its type, so each tier takes the
 // types of the tiers below it.
+// The canonical order the lists below keep, so the sonnet and opus lists (and
+// every message built from them) read as they did before 0.10.
+const KIND_ORDER: readonly TaskKind[] = [
+  'locate', 'extract', 'execute', 'inventory', 'edit', 'implement', 'tests', 'fix', 'explore', 'summarize', 'review', 'docs', 'design', 'debug',
+]
+const inOrder = (kinds: readonly TaskKind[]): readonly TaskKind[] => KIND_ORDER.filter(kind => kinds.includes(kind))
 export const KINDS_BY_TIER: Record<Tier, readonly TaskKind[]> = {
-  haiku: HAIKU_KINDS,
-  sonnet: [...HAIKU_KINDS, ...SONNET_KINDS],
-  opus: [...HAIKU_KINDS, ...SONNET_KINDS, ...OPUS_KINDS],
+  haiku: inOrder(HAIKU_KINDS),
+  sonnet: inOrder([...HAIKU_KINDS, ...SONNET_KINDS]),
+  opus: KIND_ORDER,
 }
 
 export const VERDICTS = ['accepted', 'rejected'] as const
@@ -80,9 +86,7 @@ task to the lowest tier any part qualifies for.
 
 ## 3. HAIKU GATE: all must hold
 1. The task is one of: LOCATE (return locations), EXTRACT (verbatim values
-   into a schema), EXECUTE & REPORT (run a given command, return output
-   verbatim), INVENTORY (list or count by a mechanical criterion), or
-   MECHANICAL EDIT (fully defined by the spec, with a build or test run after).
+   into a schema), or INVENTORY (list or count by a mechanical criterion).
 2. The brief pins exact targets, scope, and output format.
 3. The output is checkable by schema, a deterministic tool, or by reading the
    cited source.
@@ -96,7 +100,8 @@ task to the lowest tier any part qualifies for.
 4. Any design decision the task needs is already made in the brief.
 Typical fits: implementing a specified change, writing tests, fix-until-green
 loops, scoped exploration that returns locations with reasoning, cited
-summaries, first-pass diff review, drafting PR descriptions and docs.
+summaries, first-pass diff review, drafting PR descriptions and docs,
+running a given command and reporting its output, mechanical edits.
 
 ## 5. Briefs
 Every brief states: TASK, SCOPE (including what is out of scope), TARGETS or
@@ -109,7 +114,7 @@ and return BLOCKED with the reason. Do not resolve it yourself."
 ## 6. Return schemas
 Haiku:
   STATUS: COMPLETE | PARTIAL | BLOCKED
-  METHOD_USED: every command or search run, verbatim
+  METHOD_USED: every search or read run, verbatim
   RESULTS: location (path:line range) + verbatim evidence (15 lines max)
   NOT_FOUND / UNCERTAIN / OUT_OF_SCOPE_SEEN
   No prose, no conclusions.
@@ -193,7 +198,7 @@ export const BLOCKED_RULE: string = (() => {
 // ---------------------------------------------------------------------------
 
 export const ROUTING_BOARD_NOTE: string =
-  `On the Agent Board: every delegation is a work unit, declared before its worker is spawned: tier (opus, sonnet or haiku: what §1 selected), kind (the task type; haiku: locate, extract, execute, inventory or edit; sonnet: those and implement, tests, fix, explore, summarize, review or docs; opus: any of those, design or debug) and audit, the §9 line "<task> | <tier> | <§1 step and conditions that selected it> | <what catches an error>". Spawn it with the tier's worker type, flowestra:haiku-worker, flowestra:sonnet-worker or flowestra:opus-worker, and a name equal to the unit id (where the Agent tool takes no name, a description equal to the unit's label). A call that no such unit covers is refused, and so are the built-in types Explore, Plan, general-purpose, claude, web-fetch and claude-code-guide: the tier workers replace them, and web reading goes to a Sonnet or Opus worker, which both have the web tools. A unit that builds from an approved spec names the file in spec, and its worker is refused while that file does not exist. A unit that uses another unit's results lists it in dependsOn. After you check a worker's output (§7), send the units again with its verdict, "accepted" or "rejected". A rejection is a failure under §8: re-route the task upward under a new unit, never retry a tier more than once, and after two rejections of one kind at haiku or sonnet that kind is refused at that tier for the rest of the session. Each audit line is also written to this session's audit file. A unit you carry out yourself has no tier: give it declared (pending, done or failed). A fork is refused too: it would copy this whole conversation and run on your own model, with no tier and no audit line. A unit may also name context, up to 8 things its worker needs from earlier work (a file path, optionally with "#heading", or "<task-id>:<unit-id>" for that unit's newest journal entry): their text is placed in the worker's brief, so name the journal entries and the decisions.md entry instead of retelling them. Work is kept as tasks: a taskId opens a task or switches to it, units, phase and wave belong to their task, a worker is always spawned under the active task, and the answer to a switch gives you that task's state, so you need not hold its history; every delegation's brief, result and verdict are kept in the work journal on disk. For verbatim web content (exact text, a title, a version string), brief the worker to fetch the page with a shell command and return the output unchanged: the web tools return a summarised page, which is for reading with judgment, not for quoting.`
+  `On the Agent Board: every delegation is a work unit, declared before its worker is spawned: tier (opus, sonnet or haiku: what §1 selected), kind (the task type; haiku: locate, extract or inventory; sonnet: those and execute, edit, implement, tests, fix, explore, summarize, review or docs; opus: any of those, design or debug) and audit, the §9 line "<task> | <tier> | <§1 step and conditions that selected it> | <what catches an error>". Spawn it with the tier's worker type, flowestra:haiku-worker, flowestra:sonnet-worker or flowestra:opus-worker, and a name equal to the unit id (where the Agent tool takes no name, a description equal to the unit's label). A call that no such unit covers is refused, and so are the built-in types Explore, Plan, general-purpose, claude, web-fetch and claude-code-guide: the tier workers replace them, and web reading goes to a Sonnet or Opus worker, which both have the web tools. A unit that builds from an approved spec names the file in spec, and its worker is refused while that file does not exist. A unit that uses another unit's results lists it in dependsOn. After you check a worker's output (§7), send the units again with its verdict, "accepted" or "rejected". A rejection is a failure under §8: re-route the task upward under a new unit, never retry a tier more than once, and after two rejections of one kind at haiku or sonnet that kind is refused at that tier for the rest of the session. Each audit line is also written to this session's audit file. A unit you carry out yourself has no tier: give it declared (pending, done or failed). A fork is refused too: it would copy this whole conversation and run on your own model, with no tier and no audit line. A unit may also name context, up to 8 things its worker needs from earlier work (a file path, optionally with "#heading", or "<task-id>:<unit-id>" for that unit's newest journal entry): their text is placed in the worker's brief, so name the journal entries and the decisions.md entry instead of retelling them. Work is kept as tasks: a taskId opens a task or switches to it, units, phase and wave belong to their task, a worker is always spawned under the active task, and the answer to a switch gives you that task's state, so you need not hold its history; every delegation's brief, result and verdict are kept in the work journal on disk. For verbatim web content (exact text, a title, a version string), brief the worker to fetch the page with a shell command and return the output unchanged: the web tools return a summarised page, which is for reading with judgment, not for quoting.`
 
 export const POLICY_SECTION_ID = 'flowestra:routing-policy'
 
@@ -201,4 +206,10 @@ export const ROUTING_POLICY_SECTION: PromptComposeSection = {
   id: POLICY_SECTION_ID,
   text: ROUTING_POLICY_TEXT + '\n\n' + ROUTING_BOARD_NOTE,
   scope: 'session',
+}
+
+/** The policy section, with the worker-models note as its last paragraph when there is one. */
+export function routingPolicySection(note: string): PromptComposeSection {
+  if (note === '') return ROUTING_POLICY_SECTION
+  return { id: POLICY_SECTION_ID, text: `${ROUTING_POLICY_TEXT}\n\n${ROUTING_BOARD_NOTE}\n\n${note}`, scope: 'session' }
 }

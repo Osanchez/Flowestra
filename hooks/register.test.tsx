@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { AgentBox, Board, Detail, FlowProps, Live, Log, RowCard, Tier, Ui } from '../types'
 import { BOARD_PROMPT_SECTION, BOARD_TOOL_FULL_NAME, POLICY_SECTION_ID } from './board'
 import { WORKFLOW_SECTION_ID, workflowText } from './workflow'
+import { modelsFromOptions, modelsNote } from './models'
 import {
   REFUSED_BUILTINS,
   denyBarred,
@@ -14,6 +15,7 @@ import {
   denyRejected,
   denyRetry,
   denySpec,
+  denyUnavailable,
   denyUndeclared,
   denyWrongWorker,
 } from './state'
@@ -128,7 +130,7 @@ function engine(on: any, w: World) {
     // a hook that throws is skipped by the kit, so a failing read cannot be staged:
     // a stored board of the right shape with no units list makes the plugin's check throw instead
     if (w.corruptBoard && e.key === 'board') {
-      return { value: { value: { shape: 'board-5', value: { taskId: null, repo: null, task: null, phase: null, wave: null, units: null, agents: {}, order: [], loadedAt: T0, note: null, rejects: null, parked: null, closed: null, activeAt: T0 } }, version: 99 } }
+      return { value: { value: { shape: 'board-6', value: { taskId: null, repo: null, task: null, phase: null, wave: null, units: null, agents: {}, order: [], loadedAt: T0, note: null, rejects: null, parked: null, closed: null, activeAt: T0 } }, version: 99 } }
     }
     // a live value stored by the earlier shape (live-1), which had a cost text
     if (w.oldLive && e.key === 'live') {
@@ -480,6 +482,54 @@ test('the prompt sections with workflow light', { options: { workflow: 'light' }
 
 test('the prompt sections with workflow off', { options: { workflow: 'off' } }, async ($, on) => {
   await checkWorkflowSections($, on, 'off')
+})
+
+test('the prompt note: the policy section ends with the Opus-off note', { options: { opusWorkers: false } }, async ($, on) => {
+  const { main } = await composeBoth($, on)
+  const note = modelsNote(modelsFromOptions({ opusWorkers: false }))
+  expect(note).toContain('Opus is switched off in the Flowestra settings')
+  expect(main.filter((s: any) => s.id === POLICY_SECTION_ID)).toHaveLength(1)
+  expect(main[main.length - 1].id).toBe(POLICY_SECTION_ID)
+  expect(main[main.length - 1].text.endsWith(note)).toBe(true)
+})
+
+test('opusWorkers false: the opus worker passing model opus is refused with the suffixed text; a plain spawn runs and records ranOn', { options: { opusWorkers: false } }, async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('o1', 'opus')])
+  expect(modelsFromOptions({ opusWorkers: false }).opus).toBe('sonnet')
+  await expectRefused($, w, 'Draft the design', { name: 'o1', subagentType: workerType('opus'), model: 'opus' }, denyModelOverride('opus', 'sonnet', 'opus'), 'o1')
+  expect(denyModelOverride('opus', 'sonnet', 'opus')).toContain('(Opus is switched off in the Flowestra settings)')
+  w.spawnModel = SONNET
+  const ok: any = await spawn($, 'Draft the design', { name: 'o1', subagentType: workerType('opus') })
+  expect(ok).toEqual({ model: SONNET, agentId: 'agent-draft' })
+  const box = boxOf(boardOf(w), 'agent-draft')
+  expect(box.routed).toMatchObject({ tier: 'opus', ranOn: 'sonnet' })
+  // the tracked line names the work's tier, then the model's
+  const answer: any = await declare($, w, [])
+  expect(answer.result).toContain('Draft the design [starting, opus on sonnet, unit o1')
+})
+
+test('opusWorkers and sonnetWorkers false: an opus unit is refused as unavailable', { options: { opusWorkers: false, sonnetWorkers: false } }, async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('o1', 'opus')])
+  const models = modelsFromOptions({ opusWorkers: false, sonnetWorkers: false })
+  expect(models.opus).toBeNull()
+  await expectRefused($, w, 'Draft the design', { name: 'o1', subagentType: workerType('opus') }, denyUnavailable('o1', 'opus', models), 'o1')
+})
+
+test('no options: a spawn records ranOn equal to its tier and the tracked line has no "on"', async ($, on) => {
+  const w = world()
+  engine(on, w)
+  await start($)
+  await declare($, w, [unit('s1')])
+  await spawn($, 'Write the module', { name: 's1' })
+  expect(boxOf(boardOf(w), 'agent-write').routed).toMatchObject({ tier: 'sonnet', ranOn: 'sonnet' })
+  const answer: any = await declare($, w, [])
+  expect(answer.result).toContain('Write the module [starting, sonnet, unit s1')
 })
 
 // ---------------------------------------------------------------- lifecycle
@@ -1273,9 +1323,9 @@ test('the gate refuses the wrong tier worker, a model override, and another type
   await start($)
   await declare($, w, [unit('h1', 'haiku'), unit('s1', 'sonnet')])
   await expectRefused($, w, 'Find call sites', { name: 'h1' }, denyWrongWorker('h1', 'haiku', 'sonnet'), 'h1')
-  await expectRefused($, w, 'Write the module', { name: 's1', model: 'opus' }, denyModelOverride('sonnet', 'opus'), 's1')
-  await expectRefused($, w, 'Write the module', { name: 's1', subagentType: 'my-plugin:helper' }, denyNoModel('s1', 'sonnet'), 's1')
-  await expectRefused($, w, 'Write the module', { name: 's1', subagentType: 'my-plugin:helper', model: 'haiku' }, denyNoModel('s1', 'sonnet'), 's1')
+  await expectRefused($, w, 'Write the module', { name: 's1', model: 'opus' }, denyModelOverride('sonnet', 'sonnet', 'opus'), 's1')
+  await expectRefused($, w, 'Write the module', { name: 's1', subagentType: 'my-plugin:helper' }, denyNoModel('s1', 'sonnet', 'sonnet'), 's1')
+  await expectRefused($, w, 'Write the module', { name: 's1', subagentType: 'my-plugin:helper', model: 'haiku' }, denyNoModel('s1', 'sonnet', 'sonnet'), 's1')
   // the same model as the worker's own, and another type naming the unit's tier, go through
   expect(await spawn($, 'Write the module', { name: 's1', model: 'sonnet' })).toEqual({ model: SONNET, agentId: 'agent-write' })
   expect(await spawn($, 'Help with module', { name: 's1', subagentType: 'my-plugin:helper', model: 'sonnet' })).toEqual({ model: SONNET, agentId: 'agent-help' })

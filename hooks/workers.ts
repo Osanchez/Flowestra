@@ -8,7 +8,8 @@
 
 import type { AgentSpec, EngineInterface } from 'claude-code'
 
-import type { Tier } from '../types'
+import type { Tier, WorkerModels } from '../types'
+import { ALL_ON, tierTitle } from './models'
 import { BLOCKED_RULE, HAIKU_SCHEMA, OPUS_SCHEMA_NOTE, SONNET_SCHEMA, TIERS } from './policy'
 
 export const PLUGIN_NAME = 'flowestra'
@@ -32,10 +33,9 @@ export function tierOfWorkerType(subagentType: string): Tier | null {
   return null
 }
 
-// Opus has no `tools` list: it inherits the parent's. This build has no Grep
-// or Glob tool: searching is done through Bash.
+// Opus has no `tools` list: it inherits the parent's. The default tool set leaves out Grep and Glob (searching goes through Bash), but an agent that names them gets them (tested on 2.1.325); Haiku reads and searches only.
 export const WORKER_TOOLS: Record<'haiku' | 'sonnet', readonly string[]> = {
-  haiku: ['Read', 'Bash', 'Edit'],
+  haiku: ['Read', 'Grep', 'Glob'],
   sonnet: ['Read', 'Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch'],
 }
 export const OPUS_DISALLOWED: readonly string[] = ['Agent', 'Workflow']
@@ -61,48 +61,68 @@ export function workerPrompt(tier: Tier): string {
 
 export const WORKER_DESCRIPTIONS: Record<Tier, string> = {
   haiku:
-    'Haiku tier of the Model Routing Policy: one mechanical task (locate, extract, execute and report, inventory, mechanical edit) whose brief pins targets, scope and output format. Returns leads, never conclusions.',
+    'Haiku tier of the Model Routing Policy: one read-only task (locate, extract, inventory) whose brief pins targets, scope and output format. Reads and searches only: no shell, no edits. Returns leads, never conclusions.',
   sonnet:
     'Sonnet tier of the Model Routing Policy: specified work in one repo and one functional area, with written acceptance criteria and a named check. Returns a draft the orchestrator verifies.',
   opus:
     'Opus tier of the Model Routing Policy: anything an Opus trigger (§2) forces, or that passes neither the Haiku nor the Sonnet gate. Drafts designs; the orchestrator decides.',
 }
 
-/** The three worker types, in the order haiku, sonnet, opus. Pure. */
-export function workerSpecs(): AgentSpec[] {
-  return [
-    {
-      name: WORKER_NAMES.haiku,
-      description: WORKER_DESCRIPTIONS.haiku,
-      prompt: workerPrompt('haiku'),
-      model: 'haiku',
-      tools: WORKER_TOOLS.haiku,
-      omitClaudeMd: true,
-    },
-    {
-      name: WORKER_NAMES.sonnet,
-      description: WORKER_DESCRIPTIONS.sonnet,
-      prompt: workerPrompt('sonnet'),
-      model: 'sonnet',
-      tools: WORKER_TOOLS.sonnet,
-    },
-    {
-      name: WORKER_NAMES.opus,
-      description: WORKER_DESCRIPTIONS.opus,
-      prompt: workerPrompt('opus'),
-      model: 'opus',
-      disallowedTools: OPUS_DISALLOWED,
-    },
-  ]
+/** What the spec's description says when the tier runs on another model (3.3). */
+function describedFor(tier: Tier, runsOn: Tier): string {
+  return runsOn === tier
+    ? WORKER_DESCRIPTIONS[tier]
+    : `${WORKER_DESCRIPTIONS[tier]} Runs on ${tierTitle(runsOn)}: ${tierTitle(tier)} is switched off in the Flowestra settings.`
 }
 
 /**
- * Registers the three worker types. Call it from the mod's one `session.start`
+ * The worker types of the available tiers, in the order haiku, sonnet, opus
+ * (a tier with no model on is left out). Each runs on `models[tier]` and keeps
+ * its own tier's tools, prompt and schema. Pure.
+ */
+export function workerSpecs(models: WorkerModels = ALL_ON): AgentSpec[] {
+  const specs: AgentSpec[] = []
+  const haiku = models.haiku
+  if (haiku !== null) {
+    specs.push({
+      name: WORKER_NAMES.haiku,
+      description: describedFor('haiku', haiku),
+      prompt: workerPrompt('haiku'),
+      model: haiku,
+      tools: WORKER_TOOLS.haiku,
+      omitClaudeMd: true,
+    })
+  }
+  const sonnet = models.sonnet
+  if (sonnet !== null) {
+    specs.push({
+      name: WORKER_NAMES.sonnet,
+      description: describedFor('sonnet', sonnet),
+      prompt: workerPrompt('sonnet'),
+      model: sonnet,
+      tools: WORKER_TOOLS.sonnet,
+    })
+  }
+  const opus = models.opus
+  if (opus !== null) {
+    specs.push({
+      name: WORKER_NAMES.opus,
+      description: describedFor('opus', opus),
+      prompt: workerPrompt('opus'),
+      model: opus,
+      disallowedTools: OPUS_DISALLOWED,
+    })
+  }
+  return specs
+}
+
+/**
+ * Registers the worker types of the available tiers. Call it from the mod's one `session.start`
  * hook (`$.agent.register` rejects until the session binds there). Never
  * throws: a type that fails to register is logged and the others still are.
  */
-export async function registerWorkers($: EngineInterface): Promise<void> {
-  for (const spec of workerSpecs()) {
+export async function registerWorkers($: EngineInterface, models: WorkerModels = ALL_ON): Promise<void> {
+  for (const spec of workerSpecs(models)) {
     try {
       await $.agent.register(spec)
     } catch (error) {

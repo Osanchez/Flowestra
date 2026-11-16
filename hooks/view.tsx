@@ -23,17 +23,18 @@ import {
   formatDuration,
   inActiveTask,
   isHeld,
+  modelTier,
   otherOpen,
   otherTaskOf,
   prettyModel,
   rowLeads,
   rowOf,
   rowWorkers,
+  runTier,
   shortModel,
   shownBoxes,
   slotOf,
   tally,
-  tierOf,
   unitOf,
 } from './state'
 
@@ -299,6 +300,12 @@ function heldLine(board: Board, unit: Unit): string {
  * than its unit declares; a card of another task reads `<model> · ⇄ <task>`,
  * never a warning. A held card's line 4 is `heldLine`.
  */
+/** The tier of the work when the settings substituted another model for it (`routed.ranOn` differs), else null. */
+function substitutedTier(box: AgentBox): Tier | null {
+  const r = box.routed
+  return r && r.ranOn !== undefined && r.ranOn !== r.tier ? r.tier : null
+}
+
 function cardOf(vm: ViewModel, box: AgentBox): RowCard {
   const { board } = vm
   const status = cardStatus(vm, box)
@@ -311,13 +318,16 @@ function cardOf(vm: ViewModel, box: AgentBox): RowCard {
   let model = name
   if (other !== null) model = `${name} · ⇄ ${other}`
   else if (issue === 'no-audit') model = `${name} · no audit`
-  else if (issue === 'tier-mismatch' && tier !== null) model = `${name} · not ${tier}`
-  else if (kind !== null && kind !== undefined) model = `${name} · ${kind}`
+  else if (issue === 'tier-mismatch' && tier !== null) model = `${name} · not ${box.routed?.ranOn ?? tier}`
+  else if (kind !== null && kind !== undefined) {
+    const sub = substitutedTier(box)
+    model = sub !== null ? `${sub}→${name} · ${kind}` : `${name} · ${kind}`
+  }
   const line = isHeld(board, box) && unit !== null ? heldLine(board, unit) : cardLine(vm, box, status)
   return {
     id: box.id,
     row: rowOf(board, box),
-    tier: tierOf(board, box),
+    tier: runTier(board, box),
     warn: issue !== 'none',
     label: box.label,
     status,
@@ -587,10 +597,12 @@ function tierLines(board: Board, box: AgentBox, inner: number): DrawerLine[] {
   if (issue === 'no-audit') {
     out.push({ text: 'no audit line (policy §9)', color: 'warning' })
   } else if (issue === 'tier-mismatch' && unit !== null) {
-    out.push({ text: cut(`ran on ${prettyModel(box.model)}, unit says ${unit.tier}`, inner), color: 'warning' })
+    out.push({ text: cut(`ran on ${prettyModel(box.model)}, unit says ${unit.tier}${substitutedTier(box) !== null && box.routed?.ranOn ? ` on ${box.routed.ranOn}` : ''}`, inner), color: 'warning' })
   } else if (unit !== null && unit.tier !== null && unit.tier !== undefined) {
     const tier = unit.tier
     out.push({ text: unit.kind ? `${tier} · ${unit.kind.toUpperCase()}` : tier, color: tierColor(tier) })
+    const sub = substitutedTier(box)
+    if (sub !== null) out.push({ text: cut(`on ${prettyModel(box.model)}: ${sub.charAt(0).toUpperCase()}${sub.slice(1)} was switched off`, inner) })
     const parts = auditParts(unit.audit ?? '')
     if (parts !== null) {
       const [task, , route, check] = parts
@@ -720,11 +732,13 @@ export type LegendEntry = { model: string; tier: Tier | null; color: ThemeKey; t
  * opus, then none; models in order of first appearance (pure).
  */
 export function legendEntries(board: Board): LegendEntry[] {
-  const seen: Array<{ model: string; tier: Tier | null }> = []
+  const seen: Array<{ model: string; tier: Tier | null; sub: boolean }> = []
   for (const box of shownBoxes(board)) {
     const model = prettyModel(box.model)
-    const tier = tierOf(board, box)
-    if (!seen.some(s => s.model === model && s.tier === tier)) seen.push({ model, tier })
+    const tier = runTier(board, box)
+    // the model measured is on another tier than the work: the settings substituted it
+    const sub = tier !== null && box.model !== null && box.model !== undefined && box.model !== '' && modelTier(box.model) !== tier
+    if (!seen.some(s => s.model === model && s.tier === tier && s.sub === sub)) seen.push({ model, tier, sub })
   }
   const out: LegendEntry[] = []
   for (const tier of LEGEND_TIERS) {
@@ -734,7 +748,7 @@ export function legendEntries(board: Board): LegendEntry[] {
         model: s.model,
         tier,
         color: tier === null ? 'warning' : TIER_COLOR[tier],
-        text: ` ${s.model} · ${tier === null ? 'unrouted' : LEGEND_ROLE[tier]}`,
+        text: ` ${s.model} · ${tier === null ? 'unrouted' : `${s.sub ? `${tier} ` : ''}${LEGEND_ROLE[tier]}`}`,
       })
     }
   }

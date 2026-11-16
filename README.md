@@ -12,7 +12,7 @@ Flowestra is a Claude Code mod. It gives the main session a routing policy for c
 
 ## What it is good for
 
-- **Spending the expensive model where it matters.** Planning, design and anything risky goes to Opus. Specified work with a test to check it goes to Sonnet. Mechanical lookups and commands go to Haiku. The routing rules are written down, and every delegation records why it went where it did.
+- **Spending the expensive model where it matters.** Planning, design and anything risky goes to Opus. Specified work with a test to check it goes to Sonnet. Read-only lookups go to Haiku. The routing rules are written down, and every delegation records why it went where it did.
 - **Keeping the main session's context for decisions.** Workers read the code and do the work in their own context. The orchestrator frames the problem, reviews what comes back and decides.
 - **Working on several projects in one session.** Each piece of work is a task with its own repository, phase and units. Switching tasks takes one call, and the board hands back that task's state, so the session does not have to hold every project's history.
 - **Being able to answer "what was done, and why".** Every delegation's brief, result and verdict is written to a journal, indexed by repository, task and phase.
@@ -20,13 +20,15 @@ Flowestra is a Claude Code mod. It gives the main session a routing policy for c
 
 ## How it works
 
-**Three tiers of workers.** The mod registers one worker type per tier, each pinned to its model and carrying its own return format:
+**Three tiers of workers.** The mod registers one worker type per tier, each with its model and its own return format:
 
 | Worker | Model | Used for | Tools |
 |---|---|---|---|
-| `flowestra:haiku-worker` | Haiku | One mechanical task: locate, extract, run a command and report, inventory, a fully specified edit. Its results are leads, never conclusions | Read, Bash, Edit |
+| `flowestra:haiku-worker` | Haiku | One read-only task: locate, extract, inventory. Its results are leads, never conclusions | Read, Grep, Glob |
 | `flowestra:sonnet-worker` | Sonnet | Specified work in one repository and one area, with written acceptance criteria and a named check. Its results are drafts the orchestrator verifies | Read, Bash, Edit, Write, WebFetch, WebSearch |
 | `flowestra:opus-worker` | Opus | Design, unknown root causes, cross-repository changes, security, migrations, and anything the other two gates do not pass | Everything the orchestrator has, except spawning agents |
+
+Each tier's model can be switched off (see "Choose worker models" below); the tier's work then runs on another model, with the same tools and return format.
 
 **A routing policy, in one place.** The mod adds a Model Routing Policy to the orchestrator's instructions: a procedure to run for every delegation (any Opus trigger? does the Haiku gate hold? does the Sonnet gate hold? otherwise Opus), what each tier's brief must state, what each tier returns, and how failures escalate upward. Its text lives in `hooks/policy.ts` and nowhere else.
 
@@ -74,7 +76,7 @@ In the desktop app: click **+** next to the prompt box, then **Plugins**, **Add 
 
 The pane opens by itself when workers start. `/board` opens or closes it.
 
-**Requirements.** A Claude Code build that supports mods (plugins with a hooks module). Flowestra was built and tested on Claude Code 2.1.325, with an account that can use Opus, Sonnet and Haiku models.
+**Requirements.** A Claude Code build that supports mods (plugins with a hooks module). Flowestra was built and tested on Claude Code 2.1.325, with an account that can use the worker models you leave switched on (Opus, Sonnet and Haiku by default).
 
 ## Setting it up in your repository
 
@@ -88,9 +90,23 @@ Installing the mod gives the main session the routing policy, the workers, the g
    | `light` | The orchestrator role only: delegate to the tier workers, brief them, review what comes back. No approval gate and no decisions file |
    | `off` | Only the routing policy and the board instructions, for a workflow you write yourself in your own `CLAUDE.md` |
 
-2. **Approved designs go to `.flowestra/decisions.md`** (`full` only). Each approved design is a dated entry in that file at the project root, and worker briefs point at that entry. Commit the folder or add it to `.gitignore`, as you prefer.
-3. **Add project constraints, if any.** A project's `CLAUDE.md` can list resources its work shares (one test database, one device, one editor) and can send a kind of work to a higher tier than the policy would. It should never send work to a lower one: the policy is the only source of routing rules.
-4. **Start working.** Ask for something that needs more than one step. The orchestrator opens a task, declares its units and spawns workers, and the board shows them.
+2. **Choose worker models.** Open `/config` and set the rows "Opus workers", "Sonnet workers" and "Haiku workers", all on by default. The routing does not change; only the model that runs a tier. The main session's model is never changed. The first model in a tier's list that is on runs it (1 = on):
+
+   | Opus | Sonnet | Haiku | Opus tier runs on | Sonnet tier runs on | Haiku tier runs on |
+   |---|---|---|---|---|---|
+   | 1 | 1 | 1 | Opus | Sonnet | Haiku |
+   | 0 | 1 | 1 | Sonnet | Sonnet | Haiku |
+   | 1 | 0 | 1 | Opus | Opus | Haiku |
+   | 1 | 1 | 0 | Opus | Sonnet | Sonnet |
+   | 0 | 1 | 0 | Sonnet | Sonnet | Sonnet |
+   | 1 | 0 | 0 | Opus | Opus | Opus |
+   | 0 | 0 | 1 | refused | refused | Haiku |
+   | 0 | 0 | 0 | refused | refused | refused |
+
+   When no model is on for a tier, work routed to it is refused and the orchestrator does it itself or asks you. A change applies from the next session.
+3. **Approved designs go to `.flowestra/decisions.md`** (`full` only). Each approved design is a dated entry in that file at the project root, and worker briefs point at that entry. Commit the folder or add it to `.gitignore`, as you prefer.
+4. **Add project constraints, if any.** A project's `CLAUDE.md` can list resources its work shares (one test database, one device, one editor) and can send a kind of work to a higher tier than the policy would. It should never send work to a lower one: the policy is the only source of routing rules.
+5. **Start working.** Ask for something that needs more than one step. The orchestrator opens a task, declares its units and spawns workers, and the board shows them.
 
 What a declaration looks like, through the `AgentBoard` tool the mod registers:
 
@@ -143,7 +159,7 @@ Each unit has an `id`, a `label` of one to four words, a `wave` and optional `de
 | Field | Meaning |
 |---|---|
 | `tier` | opus, sonnet or haiku: what the routing procedure selected |
-| `kind` | The task type. Haiku: locate, extract, execute, inventory, edit. Sonnet: those and implement, tests, fix, explore, summarize, review, docs. Opus: all of those and design, debug |
+| `kind` | The task type. Haiku: locate, extract, inventory. Sonnet: those and execute, edit, implement, tests, fix, explore, summarize, review, docs. Opus: all of those and design, debug |
 | `audit` | `<task> \| <tier> \| <routing step and conditions> \| <what catches an error>` |
 | `verdict` | accepted or rejected, sent once the orchestrator has checked the result. A rejection can later be corrected to accepted, which withdraws the failure |
 | `spec` | The approved spec the unit builds from; its worker is refused while the file does not exist |
@@ -156,7 +172,7 @@ A unit the orchestrator carries out itself has no tier and takes `declared` (pen
 The pane is a flow diagram, top to bottom: the lead's box, the plan box (phase, wave, units finished), a row of Haiku workers whose results are leads, a row of Sonnet and Opus workers, and the box where results return to the lead.
 
 - **Colours by tier:** Haiku magenta, Sonnet blue, Opus lavender. A finished card turns green, a failed one red.
-- **Live cards:** each shows its model and task type, a moving bar, its current tool, elapsed time and tokens in and out. Dots travel along the rails as work goes out and comes back. Token counts are real, never estimated.
+- **Live cards:** each shows its model and task type, a moving bar, its current tool, elapsed time and tokens in and out. Dots travel along the rails as work goes out and comes back. Token counts are real, never estimated. When a tier ran on another model because its own is switched off, the card reads, for example, opus→Sonnet 5.5 · design and keeps the tier's colour.
 - **Nothing slides past unchecked:** a finished Haiku or Sonnet card stays in its row, reading `lead · unchecked` or `draft · unchecked`, until its verdict is recorded.
 - **Tasks:** the header shows the active task and how many others are open. Counts follow the active task; a worker of another task that is still running keeps its card, marked with that task's id.
 - **Session log and detail:** below the diagram, a log of spawns, audit lines, verdicts and task changes. Click a card for its brief, routing and tools in flight.
@@ -188,7 +204,7 @@ claude plugin test <folder>       # runs every *.test.ts
 claude plugin validate <folder>   # reads the manifest and type-checks the module
 ```
 
-The module is `hooks/register.tsx`; everything else under `hooks/` is pure and tested on its own: `policy.ts` (the policy text), `workflow.ts` (the workflow text and the `workflow` setting), `workers.ts` (the three worker types), `board.ts` (the tool's parser), `state.ts` (the board's reducers and the gate), `journal.ts` (the journal's formats), `log.ts`, `view.tsx` and `flow.client.tsx` (the drawing), `guard.ts` (the fail-open helper).
+The module is `hooks/register.tsx`; everything else under `hooks/` is pure and tested on its own: `policy.ts` (the policy text), `workflow.ts` (the workflow text and the `workflow` setting), `workers.ts` (the three worker types), `models.ts` (the worker model settings and their cascade), `board.ts` (the tool's parser), `state.ts` (the board's reducers and the gate), `journal.ts` (the journal's formats), `log.ts`, `view.tsx` and `flow.client.tsx` (the drawing), `guard.ts` (the fail-open helper).
 
 ## License
 

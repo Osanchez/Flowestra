@@ -19,6 +19,7 @@ import {
   VERDICTS,
   auditParts,
   auditTier,
+  routingPolicySection,
 } from './policy'
 
 // The 0.5 vocabulary, spelled apart so that a grep of the mod for it finds nothing.
@@ -33,12 +34,12 @@ describe('the constants', () => {
     expect(SPEC_MAX_CHARS).toBe(500)
   })
   test('the task types of each tier', () => {
-    expect([...HAIKU_KINDS]).toEqual(['locate', 'extract', 'execute', 'inventory', 'edit'])
-    expect([...SONNET_KINDS]).toEqual(['implement', 'tests', 'fix', 'explore', 'summarize', 'review', 'docs'])
+    expect([...HAIKU_KINDS]).toEqual(['locate', 'extract', 'inventory'])
+    expect([...SONNET_KINDS]).toEqual(['execute', 'edit', 'implement', 'tests', 'fix', 'explore', 'summarize', 'review', 'docs'])
     expect([...OPUS_KINDS]).toEqual(['design', 'debug'])
     expect([...KINDS_BY_TIER.haiku]).toEqual([...HAIKU_KINDS])
-    expect([...KINDS_BY_TIER.sonnet]).toEqual([...HAIKU_KINDS, ...SONNET_KINDS])
-    expect([...KINDS_BY_TIER.opus]).toEqual([...HAIKU_KINDS, ...SONNET_KINDS, ...OPUS_KINDS])
+    expect([...KINDS_BY_TIER.sonnet]).toEqual(['locate', 'extract', 'execute', 'inventory', 'edit', 'implement', 'tests', 'fix', 'explore', 'summarize', 'review', 'docs'])
+    expect([...KINDS_BY_TIER.opus]).toEqual(['locate', 'extract', 'execute', 'inventory', 'edit', 'implement', 'tests', 'fix', 'explore', 'summarize', 'review', 'docs', 'design', 'debug'])
     expect(KINDS_BY_TIER.opus.length).toBe(14)
   })
 })
@@ -101,7 +102,12 @@ describe('the policy text', () => {
     expect(ROUTING_POLICY_TEXT).toContain('\n<task> | <tier> | <§1 step and conditions that selected it> | <what catches an error>\n')
     expect(ROUTING_POLICY_TEXT.endsWith(last)).toBe(true)
     expect(ROUTING_POLICY_TEXT.endsWith('\n')).toBe(false)
-    expect(ROUTING_POLICY_TEXT.split('\n').length).toBe(90)
+    expect(ROUTING_POLICY_TEXT.split('\n').length).toBe(89)
+  })
+  test('Haiku is read-only: no execute or edit task, METHOD_USED names searches and reads', () => {
+    expect(ROUTING_POLICY_TEXT).not.toContain('EXECUTE & REPORT')
+    expect(ROUTING_POLICY_TEXT).not.toContain('MECHANICAL EDIT')
+    expect(ROUTING_POLICY_TEXT).toContain('METHOD_USED: every search or read run, verbatim')
   })
 })
 
@@ -180,5 +186,18 @@ describe('the policy section', () => {
   test('nothing of the old policy remains', () => {
     expect(ROUTING_POLICY_SECTION.text.toLowerCase()).not.toContain(OLD_WORD)
     expect(ROUTING_POLICY_SECTION.text).not.toContain(OLD_POLICY)
+  })
+})
+
+describe('routingPolicySection', () => {
+  test('an empty note gives the constant itself', () => {
+    expect(routingPolicySection('')).toBe(ROUTING_POLICY_SECTION)
+  })
+  test('a note is the last paragraph, with the same id and scope', () => {
+    const section = routingPolicySection('A note.')
+    expect(section.id).toBe(POLICY_SECTION_ID)
+    expect(section.scope).toBe('session')
+    expect(section.text).toBe(`${ROUTING_POLICY_TEXT}\n\n${ROUTING_BOARD_NOTE}\n\nA note.`)
+    expect(section.text.split('\n\n').pop()).toBe('A note.')
   })
 })

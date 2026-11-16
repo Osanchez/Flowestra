@@ -25,7 +25,8 @@ export type AgentBox = {
 }
 // A delegation's routing, recorded on the agent at spawn (0.7.0), so a box stays
 // audited after its unit leaves the list, its task is switched away from, or closed.
-export type Routed = { tier: Tier; kind: TaskKind; audit: string }
+// `ranOn`: the tier whose model the settings assigned to this tier at spawn; absent means the tier itself.
+export type Routed = { tier: Tier; kind: TaskKind; audit: string; ranOn?: Tier }
 export type Phase = 'analysis' | 'design' | 'approval' | 'executing' | 'testing' | 'review' | 'done'
 // ---- routing (0.6.0): the Model Routing Policy on the board. The policy's own
 // text lives in hooks/policy.ts and nowhere else. A worker's tier is MEASURED
@@ -34,8 +35,12 @@ export type Phase = 'analysis' | 'design' | 'approval' | 'executing' | 'testing'
 // the task type, the §9 audit line and, once the orchestrator has checked the
 // output (§7), its verdict.
 export type Tier = 'opus' | 'sonnet' | 'haiku'
-// The task type of a delegation. Haiku: the five of §3. Sonnet: those (a task
-// escalated from Haiku keeps its type) and the seven typical fits of §4. Opus:
+// Which tier's model runs each tier's work, from the worker-model switches (0.10.0):
+// the tier itself when its switch is on, else the next one on in the cascade; null:
+// no model is on for that tier (its work is refused at spawn).
+export type WorkerModels = Record<Tier, Tier | null>
+// The task type of a delegation. Haiku: the three of §3. Sonnet: those, execute and
+// edit (Haiku's until 0.10) and the seven typical fits of §4. Opus:
 // every type, 'design' and 'debug' included.
 export type TaskKind =
   | 'locate' | 'extract' | 'execute' | 'inventory' | 'edit'
@@ -120,7 +125,7 @@ export type Row = 'leads' | 'workers'   // the row a card is drawn in: Haiku wor
 export type RowCard = {       // one agent's card in its row
   id: string
   row: Row
-  tier: Tier | null      // the measured tier, for the card's colour; null: a model outside the three tiers, or unknown
+  tier: Tier | null      // the tier the card is drawn at (runTier): the work's tier for a substituted run, else measured from its model; null: a model outside the three tiers, or unknown
   warn: boolean          // line 2 drawn in the warning colour: no audit line, or a tier the unit did not declare
   label: string          // at most 4 words
   status: RowCardStatus

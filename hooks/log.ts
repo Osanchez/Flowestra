@@ -11,7 +11,7 @@
 // register.tsx compares the board before and after each write and pushes what changed.
 
 import type { AgentBox, Board, BoxStatus, Log, LogEntry, Tier } from '../types'
-import { MAIN_ID, auditIssue, barred, fedUnits, formatDuration, isPlaceholder, prettyModel, tierOf, unitOf, withdrawn } from './state'
+import { MAIN_ID, auditIssue, barred, fedUnits, formatDuration, isPlaceholder, prettyModel, runTier, unitOf, withdrawn } from './state'
 
 // Change the tag when Log's fields change (see BOARD_SHAPE in state.ts).
 // 0.5.0 only widened LogKind ('audit', 'verdict'): the fields are the same, so the tag stays.
@@ -54,10 +54,17 @@ function elapsedPart(box: AgentBox): string {
   return ` · ${formatDuration(box.endedAt - box.startedAt)}`
 }
 
+/** The model part of a spawn line: `opus→Sonnet 5.5` when the settings substituted another model, else the model. */
+function ranOnPart(box: AgentBox): string {
+  const r = box.routed
+  const name = prettyModel(box.model)
+  return r && r.ranOn !== undefined && r.ranOn !== r.tier ? `${r.tier}→${name}` : name
+}
+
 function endedEntry(board: Board, box: AgentBox, at: number): LogEntry | null {
   switch (box.status) {
     case 'done': {
-      const draft = tierOf(board, box) === 'sonnet' ? ' · draft' : ''
+      const draft = runTier(board, box) === 'sonnet' ? ' · draft' : ''
       return { at, kind: 'done', who: box.label, text: `done${elapsedPart(box)}${draft}` }
     }
     case 'failed':
@@ -93,7 +100,9 @@ function auditEntry(before: Board, after: Board, prev: AgentBox | undefined, box
     return { at, kind: 'audit', who: box.label, text: 'no audit line (policy §9)' }
   }
   if (is === 'tier-mismatch') {
-    const said = unitOf(after, box)?.tier ?? ''
+    const said0 = unitOf(after, box)?.tier ?? ''
+    const ranOn = box.routed?.ranOn
+    const said = ranOn !== undefined && ranOn !== box.routed?.tier ? `${said0} on ${ranOn}` : said0
     return { at, kind: 'audit', who: box.label, text: `ran on ${prettyModel(box.model)}, unit says ${said}` }
   }
   return null
@@ -146,7 +155,7 @@ export function logDiff(before: Board, after: Board, at: number): LogEntry[] {
     if (!isPlaceholder(box) && (prev === undefined || isPlaceholder(prev))) {
       const kind: unknown = box.routed?.kind ?? unitOf(after, box)?.kind
       const kindPart = typeof kind === 'string' && kind !== '' ? ` · ${kind}` : ''
-      out.push({ at, kind: 'spawned', who: box.label, text: `spawned · ${prettyModel(box.model)}${kindPart}` })
+      out.push({ at, kind: 'spawned', who: box.label, text: `spawned · ${ranOnPart(box)}${kindPart}` })
     }
     const audit = auditEntry(before, after, prev, box, at)
     if (audit !== null) out.push(audit)

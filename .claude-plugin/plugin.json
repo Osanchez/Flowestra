@@ -1,6 +1,6 @@
 {
   "name": "flowestra",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Orchestrate Claude Code work across model tiers: a live Agent Board of your Opus, Sonnet and Haiku workers, a routing policy with a gate that enforces it, tasks across repositories, and a work journal on disk of every delegation.",
   "types": "./types/index.d.ts",
   "author": {
@@ -17,6 +17,24 @@
       "description": "full: the main session works as an orchestrator, with the whole workflow: an Opus worker drafts each design, you approve it before anything is built, and approved designs go to .flowestra/decisions.md in your project. light: the orchestrator role only (delegate to the tier workers, brief them, review what comes back), no approval gate and no decisions file. off: only the routing policy and the board instructions, for a workflow you keep in your own CLAUDE.md.",
       "default": "full",
       "options": ["full", "light", "off"]
+    },
+    "opusWorkers": {
+      "type": "boolean",
+      "title": "Opus workers",
+      "description": "On: Opus-tier work runs on Opus. Off: it runs on Sonnet; if Sonnet is off too, Opus-tier work is refused and the orchestrator does it or asks you. The routing policy does not change, only the model that runs the tier. The main session's model is never changed.",
+      "default": true
+    },
+    "sonnetWorkers": {
+      "type": "boolean",
+      "title": "Sonnet workers",
+      "description": "On: Sonnet-tier work runs on Sonnet. Off: it runs on Opus, never on Haiku; if Opus is off too, Sonnet-tier work is refused and the orchestrator does it or asks you. The main session's model is never changed.",
+      "default": true
+    },
+    "haikuWorkers": {
+      "type": "boolean",
+      "title": "Haiku workers",
+      "description": "On: Haiku-tier work (read-only lookups) runs on Haiku. Off: it runs on Sonnet, or on Opus if Sonnet is off too, with the same read-only tools. The main session's model is never changed.",
+      "default": true
     }
   }
 }

@@ -2193,3 +2193,56 @@ test('the band opens with the task id when one is open (mounted)', async ($, on)
     await ui.unmount()
   }
 })
+
+// ---------------------------------------------------------------- a worker model switched off (0.10.0)
+
+describe('a substituted run (routed.ranOn differs from the unit\'s tier)', () => {
+  const routedOn = (tier: Tier, ranOn: Tier) => ({ tier, kind: DEFAULT_KIND[tier], audit: auditFor(tier), ranOn })
+
+  test('opus work on Sonnet: workers row, tier opus, line 2 "opus→Sonnet 5.5 · design"', () => {
+    const b = board({ units: [tierUnit('O1', 'opus')] }, [
+      agent('main'),
+      agent('o1', { model: SONNET, unitId: 'O1', routed: routedOn('opus', 'sonnet') }),
+    ])
+    const c = flowProps(vmOf(b)).workers.find(w => w.id === 'o1')!
+    expect({ row: c.row, tier: c.tier, model: c.model, warn: c.warn }).toEqual({ row: 'workers', tier: 'opus', model: 'opus→Sonnet 5.5 · design', warn: false })
+  })
+
+  test('haiku work on Sonnet stays in the leads row, tier haiku, line 2 "haiku→Sonnet 5.5 · locate"', () => {
+    const b = board({ units: [haikuUnit('H1')] }, [
+      agent('main'),
+      agent('h1', { model: SONNET, unitId: 'H1', routed: routedOn('haiku', 'sonnet') }),
+    ])
+    const c = flowProps(vmOf(b)).leads.find(w => w.id === 'h1')!
+    expect({ row: c.row, tier: c.tier, model: c.model, warn: c.warn }).toEqual({ row: 'leads', tier: 'haiku', model: 'haiku→Sonnet 5.5 · locate', warn: false })
+  })
+
+  test('the detail strip says which model it ran on', () => {
+    const b = board({ units: [tierUnit('O1', 'opus')] }, [
+      agent('main'),
+      agent('o1', { model: SONNET, unitId: 'O1', routed: routedOn('opus', 'sonnet') }),
+    ])
+    const lines = detailLines(vmOf(b), b.agents.o1!, 60)
+    expect(lines.map(l => l.text)).toContain('on Sonnet 5.5: Opus was switched off')
+    expect(lines[1]).toEqual({ text: 'opus · DESIGN', color: 'suggestion' })
+    expect(lines[2]).toEqual({ text: 'on Sonnet 5.5: Opus was switched off' })
+  })
+
+  test('the legend names the tier of the work: " Sonnet 5.5 · opus workers" in the opus colour', () => {
+    const b = board({ units: [tierUnit('O1', 'opus')] }, [
+      agent('main'),
+      agent('o1', { model: SONNET, unitId: 'O1', routed: routedOn('opus', 'sonnet') }),
+    ])
+    expect(legendEntries(b)).toEqual([{ model: 'Sonnet 5.5', tier: 'opus', color: 'suggestion', text: ' Sonnet 5.5 · opus workers' }])
+  })
+
+  test('on the wrong model (Haiku) it is a mismatch against the substituted tier: "not sonnet"', () => {
+    const b = board({ units: [tierUnit('O1', 'opus')] }, [
+      agent('main'),
+      agent('o1', { model: HAIKU, unitId: 'O1', routed: routedOn('opus', 'sonnet') }),
+    ])
+    const c = flowProps(vmOf(b)).leads.find(w => w.id === 'o1')!
+    expect(c.model).toBe('Haiku 5.5 · not sonnet')
+    expect(c.warn).toBe(true)
+  })
+})
