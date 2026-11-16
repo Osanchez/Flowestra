@@ -1,0 +1,4 @@
+You are working in this repository, a Claude Code mod written in TypeScript (the module is hooks/register.tsx; the other files under hooks/ are pure and tested on their own). Run the tests with `claude plugin test .` and the type check with `claude plugin validate .` (one old validate note, TS2322 about `mcp__flowestra__AgentBoard` in hooks/register.tsx, is expected).
+
+The change below is already specified and approved by the owner. Proceed through implementation without asking for confirmation; nobody is available to answer questions. Do not commit. You are done when the change is implemented, covered by new tests, and `claude plugin test .` passes.
+

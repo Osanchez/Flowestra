@@ -18,6 +18,20 @@ Flowestra is a Claude Code mod. It gives the main session a routing policy for c
 - **Being able to answer "what was done, and why".** Every delegation's brief, result and verdict is written to a journal, indexed by repository, task and phase.
 - **Seeing what your agents are doing.** A pane beside the chat shows each worker's model, current tool, elapsed time and real token counts, with results flowing back to the lead.
 
+## Token cost, measured
+
+Flowestra is not a token saver. Here is what it costs, measured on 12 fresh sessions (Flowestra 0.15.0, Opus 5.5 lead, 3 runs per cell, median):
+
+| Task | Without Flowestra | With Flowestra | Difference |
+|---|---:|---:|---:|
+| Small: one fix | 1.00M tokens | 1.06M tokens | +6% |
+| Larger: three fixes | 3.47M tokens | 4.16M tokens | +20% |
+| Fixed cost per request | | | +8.7k tokens, mostly cached |
+
+On both tasks the lead chose to do the work itself, as the delegation threshold tells it to, so these differences are the cost of having the orchestrator available. They are inside the run-to-run spread. **Delegating costs more:** an earlier test that forced it on a small task used 3.2× the tokens. What Flowestra buys is routing by rule, a lead context that stays small on long work, an approval gate, an audit trail and a live view of where tokens go.
+
+**[Full benchmark: method, every run, benefits, limitations and when it's worth it →](docs/BENCHMARK.md)**
+
 ## How it works
 
 **Three tiers of workers.** The mod registers one worker type per tier, each with its model and its own return format:

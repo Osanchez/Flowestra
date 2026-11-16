@@ -1,0 +1,7 @@
+## Change: verdict carry-over in the journal (S9)
+
+Problem: when two sessions write journal entries for the same task, a verdict recorded by another session can drop out of the index when this session later rewrites its own entry, so the entry file and the index disagree.
+
+Specified fix: in `writeEntry`, for this session's own entry, before writing its shard line: if another session's merged line for the same key is newer and its verdict field differs, adopt that verdict into the entry data (`verdict`, and `verdictMs` = that line's time) so the entry file and the index agree.
+
+Acceptance: a test where another session's newer shard line carries a verdict for the same key, and this session then rewrites its entry: both the entry file and the index carry the adopted verdict and time. A test where the other line is older, or has the same verdict, leaves the entry unchanged. All existing tests still pass.

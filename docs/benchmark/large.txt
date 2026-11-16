@@ -1,0 +1,18 @@
+## Change: three journal robustness fixes (S2, S9, atomic writes)
+
+### 1. S2 guard: stale writer
+Each session remembers, per task, the `updatedMs` and session of the task's `state.json` it last read or wrote. Before writing, it reads `state.json`; when that names another session and an `updatedMs` newer than the remembered one, it writes `state.<sid8>.json` instead (sid8 = the first 8 characters of this session's id), and the next AgentBoard answer carries exactly:
+`task <id> was changed on disk by session <sid8> after this session loaded it; this session's state was saved to state.<sid8>.json. Switch to the task with its taskId to load the newer state.`
+(here <sid8> in "changed on disk by session" is the other session's first 8 characters). Read-check-write is not atomic; that race is accepted.
+
+### 2. S9 verdict carry-over
+In `writeEntry`, for this session's own entry, before writing its shard line: if another session's merged line for the same key is newer and its verdict field differs, adopt that verdict into the entry data (`verdict`, and `verdictMs` = that line's time) so the entry file and the index agree.
+
+### 3. Write to a temporary file, then rename
+For shards and entry files, where `$.process.run` is available: write the content to a temporary file next to the target, then replace the target with `mv` (atomic on POSIX). Where it is not available, or the `mv` fails, fall back to today's in-place write. Note: the hooks loader rejects `$.<noun>` used as a value (for example `typeof $.process?.run`); detect availability another way.
+
+### Acceptance
+- S2: a test where another session wrote a newer `state.json` after this session loaded the task: this session's write goes to `state.<sid8>.json`, `state.json` is untouched, and the next answer carries the text above. A test where no other session wrote: the write goes to `state.json` as today.
+- S9: a test where another session's newer shard line carries a different verdict: entry file and index both carry the adopted verdict and time; older or equal lines leave the entry unchanged.
+- Atomic writes: a test that the shard and entry writes go through a temporary file and an `mv` when process.run is available, and a test of the in-place fallback when it is not or when `mv` fails.
+- All existing tests still pass.
