@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import type { AgentBox, Board, Detail, FlowProps, Live, Log, RowCard, Tier, Ui } from '../types'
 import { BOARD_PROMPT_SECTION, BOARD_TOOL_FULL_NAME, POLICY_SECTION_ID } from './board'
+import { WORKFLOW_SECTION_ID, workflowText } from './workflow'
 import {
   REFUSED_BUILTINS,
   denyBarred,
@@ -445,14 +446,40 @@ test('/board toggles the pane: opened, closed, and waiting when not placed', asy
 // plugin's ui.close hook that sets live.paneOpen false is exercised only in a
 // session. /board's own close sets it (test above).
 
-test('the prompt sections are added once each, last: the board\'s then the policy\'s', async ($, on) => {
-  const w = world()
-  engine(on, w)
-  const input = { model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] }
-  const r: any = await $.prompt.compose(input as any)
-  expect(r.sections.map((s: any) => s.id)).toEqual(['intro', BOARD_PROMPT_SECTION.id, POLICY_SECTION_ID])
-  const teammate: any = await $.prompt.compose({ ...input, traits: ['teammate'] } as any)
-  expect(teammate.sections.map((s: any) => s.id)).toEqual(['intro'])
+const composeInput = { model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] }
+
+// The sections a main-loop render ends with, and the ids a teammate render ends with.
+async function composeBoth($: any, on: any): Promise<{ main: any[]; teammate: string[] }> {
+  engine(on, world())
+  const main: any = await $.prompt.compose(composeInput as any)
+  const teammate: any = await $.prompt.compose({ ...composeInput, traits: ['teammate'] } as any)
+  return { main: main.sections, teammate: teammate.sections.map((s: any) => s.id) }
+}
+
+async function checkWorkflowSections($: any, on: any, mode: 'full' | 'light' | 'off') {
+  const { main, teammate } = await composeBoth($, on)
+  const ids = mode === 'off'
+    ? ['intro', BOARD_PROMPT_SECTION.id, POLICY_SECTION_ID]
+    : ['intro', WORKFLOW_SECTION_ID, BOARD_PROMPT_SECTION.id, POLICY_SECTION_ID]
+  expect(main.map((s: any) => s.id)).toEqual(ids)
+  if (mode !== 'off') expect(main[1].text).toBe(workflowText(mode))
+  expect(teammate).toEqual(['intro'])
+}
+
+test('the prompt sections with no options: the workflow\'s (full), the board\'s, the policy\'s', async ($, on) => {
+  await checkWorkflowSections($, on, 'full')
+})
+
+test('the prompt sections with workflow full', { options: { workflow: 'full' } }, async ($, on) => {
+  await checkWorkflowSections($, on, 'full')
+})
+
+test('the prompt sections with workflow light', { options: { workflow: 'light' } }, async ($, on) => {
+  await checkWorkflowSections($, on, 'light')
+})
+
+test('the prompt sections with workflow off', { options: { workflow: 'off' } }, async ($, on) => {
+  await checkWorkflowSections($, on, 'off')
 })
 
 // ---------------------------------------------------------------- lifecycle

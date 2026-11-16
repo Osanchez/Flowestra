@@ -28,6 +28,8 @@ import {
   auditParts,
 } from './policy'
 import { labelKey } from './state'
+import { workflowSection } from './workflow'
+import type { WorkflowMode } from './workflow'
 
 export { POLICY_SECTION_ID, ROUTING_POLICY_SECTION } from './policy'
 
@@ -615,20 +617,34 @@ export const BOARD_PROMPT_SECTION: PromptComposeSection = {
 }
 
 /**
+ * The sections with the mod's sections added after them, in this order: the
+ * orchestrator workflow's (none for mode `off`), the board's, the Model
+ * Routing Policy's. Each is added only if no section with its id is there
+ * already (a present one is never replaced); the same list (unchanged) when
+ * nothing is added. The input is not mutated. Pure.
+ */
+export function withFlowestraSections(
+  sections: readonly PromptComposeSection[],
+  mode: WorkflowMode,
+): readonly PromptComposeSection[] {
+  const added: PromptComposeSection[] = []
+  const wanted = [workflowSection(mode), BOARD_PROMPT_SECTION, ROUTING_POLICY_SECTION]
+  for (const section of wanted) {
+    if (section !== null && !sections.some(existing => existing.id === section.id)) added.push(section)
+  }
+  return added.length === 0 ? sections : [...sections, ...added]
+}
+
+/**
  * The sections with the board's section and the Model Routing Policy's
  * section added after them, each exactly once, the board's before the
- * policy's: the same list (unchanged) only when both are already there. Pure.
+ * policy's: the same list (unchanged) only when both are already there.
+ * `withFlowestraSections` with the workflow off. Pure.
  */
 export function withBoardSection(
   sections: readonly PromptComposeSection[],
 ): readonly PromptComposeSection[] {
-  const hasBoard = sections.some(section => section.id === PROMPT_SECTION_ID)
-  const hasPolicy = sections.some(section => section.id === POLICY_SECTION_ID)
-  if (hasBoard && hasPolicy) return sections
-  const added: PromptComposeSection[] = []
-  if (!hasBoard) added.push(BOARD_PROMPT_SECTION)
-  if (!hasPolicy) added.push(ROUTING_POLICY_SECTION)
-  return [...sections, ...added]
+  return withFlowestraSections(sections, 'off')
 }
 
 /**

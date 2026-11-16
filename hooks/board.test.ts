@@ -16,9 +16,12 @@ import {
   summarizeUpdate,
   wantsBoardSection,
   withBoardSection,
+  withFlowestraSections,
 } from './board'
 import type { BoardUpdate } from './board'
 import type { Unit } from '../types'
+import { WORKFLOW_SECTION_ID, workflowText } from './workflow'
+import type { WorkflowMode } from './workflow'
 
 // The 0.5 vocabulary, spelled apart so that a grep of the mod for it finds nothing.
 const OLD_WORD = 'sco' + 'ut'
@@ -638,6 +641,58 @@ describe('the prompt section', () => {
     expect(wantsBoardSection([])).toBe(true)
     expect(wantsBoardSection(['skills', 'lean'])).toBe(true)
     expect(wantsBoardSection(['teammate'])).toBe(false)
+  })
+})
+
+describe('withFlowestraSections', () => {
+  const base = [
+    { id: 'intro', text: 'a', scope: 'shared' as const },
+    { id: 'memory', text: 'b', scope: 'session' as const },
+  ]
+  const modes: WorkflowMode[] = ['full', 'light', 'off']
+  for (const mode of modes) {
+    test(`appends the sections in order for ${mode}`, () => {
+      const out = withFlowestraSections(base, mode)
+      const expected = ['intro', 'memory', ...(mode === 'off' ? [] : [WORKFLOW_SECTION_ID]), 'flowestra:orchestrator', POLICY_SECTION_ID]
+      expect(out.map(s => s.id)).toEqual(expected)
+      if (mode !== 'off') {
+        const workflow = out[2]
+        expect(workflow?.text).toBe(workflowText(mode))
+        expect(workflow?.scope).toBe('session')
+      }
+      expect(out[out.length - 2]).toEqual(BOARD_PROMPT_SECTION)
+      expect(out[out.length - 1]).toEqual(ROUTING_POLICY_SECTION)
+    })
+    test(`is idempotent for ${mode}`, () => {
+      const once = withFlowestraSections(base, mode)
+      const twice = withFlowestraSections(once, mode)
+      expect(twice).toBe(once)
+      expect(twice).toEqual(once)
+    })
+  }
+  test('returns the same list when all are there', () => {
+    const all = [
+      { id: WORKFLOW_SECTION_ID, text: 'mine', scope: 'session' as const },
+      BOARD_PROMPT_SECTION,
+      ROUTING_POLICY_SECTION,
+    ]
+    expect(withFlowestraSections(all, 'full')).toBe(all)
+  })
+  test('does not duplicate or replace a present workflow section, even for another mode', () => {
+    const present = { id: WORKFLOW_SECTION_ID, text: 'mine', scope: 'session' as const }
+    const out = withFlowestraSections([present], 'light')
+    expect(out.filter(s => s.id === WORKFLOW_SECTION_ID).length).toBe(1)
+    expect(out[0]).toBe(present)
+    expect(out.map(s => s.id)).toEqual([WORKFLOW_SECTION_ID, 'flowestra:orchestrator', POLICY_SECTION_ID])
+    const full = withFlowestraSections([present], 'full')
+    expect(full[0]?.text).toBe('mine')
+    expect(full.length).toBe(3)
+  })
+  test('does not mutate its input', () => {
+    const input = [...base]
+    withFlowestraSections(input, 'full')
+    expect(input).toEqual(base)
+    expect(input.length).toBe(2)
   })
 })
 

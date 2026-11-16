@@ -116,8 +116,9 @@ import {
   registerBoardCommand,
   registerBoardTool,
   wantsBoardSection,
-  withBoardSection,
+  withFlowestraSections,
 } from './board'
+import { workflowMode } from './workflow'
 import type { BoardToggleResult, BoardUpdate } from './board'
 import {
   BOARD_SHAPE,
@@ -1450,7 +1451,8 @@ async function wantsBand($: EngineInterface): Promise<boolean> {
 
 // ---------------------------------------------------------------- hooks
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const mode = workflowMode(options)
   on('session.start', async ($, e, next) => {
     await registerBoardTool($)
     await registerBoardCommand($)
@@ -1653,7 +1655,7 @@ export const register: Register = on => {
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
     if (!wantsBoardSection(e.traits)) return composed
-    return { sections: withBoardSection(composed.sections) }
+    return { sections: withFlowestraSections(composed.sections, mode) }
   })
 
   // The pane. On the terminal the flow diagram is the surface module, keyed

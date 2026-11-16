@@ -78,10 +78,17 @@ The pane opens by itself when workers start. `/board` opens or closes it.
 
 ## Setting it up in your repository
 
-Installing the mod gives the main session the routing policy, the workers, the gate, the board and the journal. The workflow around them (who designs, who approves, when a spec is written down) is a set of instructions you keep in your own `CLAUDE.md`.
+Installing the mod gives the main session the routing policy, the workers, the gate, the board, the journal and, by default, the orchestrator workflow. No `CLAUDE.md` is needed.
 
-1. **Add the workflow.** Copy [`docs/CLAUDE.example.md`](docs/CLAUDE.example.md) into `~/.claude/CLAUDE.md` to use it in every project, or into a project's `CLAUDE.md` for one project. It describes the orchestrator's role, the steps of a task (frame, design, review, approval, spec to disk, execution, test, review) and how the board is kept current. Edit it to suit how you work.
-2. **Keep approved designs in `decisions.md`.** The workflow writes each approved design as a dated entry in `decisions.md` at the project root, and worker briefs point at that entry.
+1. **Choose a workflow.** Open `/config` and set the row "Workflow" (the install screen shows it too). It applies from the next session.
+
+   | Value | What the main session gets |
+   |---|---|
+   | `full` (default) | The orchestrator role and the whole workflow: frame, design by an Opus worker, design review, your approval before anything is built, the approved spec written to `.flowestra/decisions.md`, execution in waves, test, review |
+   | `light` | The orchestrator role only: delegate to the tier workers, brief them, review what comes back. No approval gate and no decisions file |
+   | `off` | Only the routing policy and the board instructions, for a workflow you write yourself in your own `CLAUDE.md` |
+
+2. **Approved designs go to `.flowestra/decisions.md`** (`full` only). Each approved design is a dated entry in that file at the project root, and worker briefs point at that entry. Commit the folder or add it to `.gitignore`, as you prefer.
 3. **Add project constraints, if any.** A project's `CLAUDE.md` can list resources its work shares (one test database, one device, one editor) and can send a kind of work to a higher tier than the policy would. It should never send work to a lower one: the policy is the only source of routing rules.
 4. **Start working.** Ask for something that needs more than one step. The orchestrator opens a task, declares its units and spawns workers, and the board shows them.
 
@@ -110,8 +117,8 @@ What a declaration looks like, through the `AgentBoard` tool the mod registers:
       "tier": "sonnet",
       "kind": "implement",
       "audit": "implement the limiter from the approved spec | sonnet | step 3: Sonnet gate holds: one area, criteria in the spec, tests named as the check | the tests, then my review",
-      "spec": "decisions.md",
-      "context": ["rate-limit:find", "/path/to/repo/decisions.md#Rate limiter"]
+      "spec": ".flowestra/decisions.md",
+      "context": ["rate-limit:find", "/path/to/repo/.flowestra/decisions.md#Rate limiter"]
     }
   ]
 }
@@ -181,7 +188,7 @@ claude plugin test <folder>       # runs every *.test.ts
 claude plugin validate <folder>   # reads the manifest and type-checks the module
 ```
 
-The module is `hooks/register.tsx`; everything else under `hooks/` is pure and tested on its own: `policy.ts` (the policy text), `workers.ts` (the three worker types), `board.ts` (the tool's parser), `state.ts` (the board's reducers and the gate), `journal.ts` (the journal's formats), `log.ts`, `view.tsx` and `flow.client.tsx` (the drawing), `guard.ts` (the fail-open helper).
+The module is `hooks/register.tsx`; everything else under `hooks/` is pure and tested on its own: `policy.ts` (the policy text), `workflow.ts` (the workflow text and the `workflow` setting), `workers.ts` (the three worker types), `board.ts` (the tool's parser), `state.ts` (the board's reducers and the gate), `journal.ts` (the journal's formats), `log.ts`, `view.tsx` and `flow.client.tsx` (the drawing), `guard.ts` (the fail-open helper).
 
 ## License
 

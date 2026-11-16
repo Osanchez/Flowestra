@@ -1,6 +1,6 @@
 {
   "name": "flowestra",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "Orchestrate Claude Code work across model tiers: a live Agent Board of your Opus, Sonnet and Haiku workers, a routing policy with a gate that enforces it, tasks across repositories, and a work journal on disk of every delegation.",
   "types": "./types/index.d.ts",
   "author": {
@@ -9,5 +9,14 @@
   },
   "license": "MIT",
   "repository": "https://github.com/Osanchez/Flowestra",
-  "homepage": "https://github.com/Osanchez/Flowestra"
+  "homepage": "https://github.com/Osanchez/Flowestra",
+  "userConfig": {
+    "workflow": {
+      "type": "string",
+      "title": "Workflow",
+      "description": "full: the main session works as an orchestrator, with the whole workflow: an Opus worker drafts each design, you approve it before anything is built, and approved designs go to .flowestra/decisions.md in your project. light: the orchestrator role only (delegate to the tier workers, brief them, review what comes back), no approval gate and no decisions file. off: only the routing policy and the board instructions, for a workflow you keep in your own CLAUDE.md.",
+      "default": "full",
+      "options": ["full", "light", "off"]
+    }
+  }
 }
